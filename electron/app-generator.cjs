@@ -266,6 +266,8 @@ function ensureTerminalState(projectId) {
   const state = {
     running: false,
     output: "",
+    outputSeq: 0,
+    lastChunk: "",
     startedAt: null,
     updatedAt: now(),
     lastExitCode: null,
@@ -287,6 +289,8 @@ function appendTerminalOutput(projectId, stream, text) {
   const state = ensureTerminalState(projectId);
   const rendered = stream === "system" ? `\r\n[tool-hub] ${chunk}` : chunk;
   state.output = `${state.output}${rendered}`;
+  state.outputSeq = Number(state.outputSeq ?? 0) + 1;
+  state.lastChunk = rendered;
   if (state.output.length > TERMINAL_OUTPUT_MAX_CHARS) {
     state.output = state.output.slice(state.output.length - TERMINAL_OUTPUT_MAX_CHARS);
   }
@@ -299,6 +303,8 @@ function toPublicTerminalState(projectId, state) {
     projectId,
     running: Boolean(state.running),
     output: String(state.output ?? ""),
+    outputSeq: Number(state.outputSeq ?? 0),
+    lastChunk: String(state.lastChunk ?? ""),
     startedAt: state.startedAt ? Number(state.startedAt) : null,
     updatedAt: Number(state.updatedAt ?? now()),
     lastExitCode: Number.isInteger(state.lastExitCode) ? state.lastExitCode : null,

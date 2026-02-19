@@ -72,6 +72,8 @@ export interface GeneratorTerminalState {
   projectId: string;
   running: boolean;
   output: string;
+  outputSeq: number;
+  lastChunk: string;
   startedAt: number | null;
   updatedAt: number;
   lastExitCode: number | null;

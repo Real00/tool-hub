@@ -72,6 +72,25 @@ defaultTabs: [
 - App UI opens in a separate Electron window (not embedded in main page).
 - A runnable template is available at `templates/node-hello-app`.
 
+### App UI host API
+
+When an app UI window is opened by Tool Hub, the host injects `window.toolHubAppApi` in that window:
+
+- `getRuntimeInfo()` -> returns `{ appId }`
+- `storage.get(key)`
+- `storage.set(key, value)`
+- `storage.delete(key)`
+- `storage.list(prefix?)`
+- `storage.clear()`
+- `files.read(path, options?)`
+- `files.write(path, content, options?)`
+- `systemFiles.read(absPath, options?)`
+- `systemFiles.write(absPath, content, options?)`
+
+All storage entries are persisted in host SQLite and scoped by app id.
+`files.*` paths are constrained inside the current app directory.
+`systemFiles.*` supports absolute paths and may require elevated OS permissions for protected files.
+
 ### `app.json` (minimum)
 
 ```json

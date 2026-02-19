@@ -12,6 +12,8 @@ const DB_FILE_NAME = "apps.sqlite";
 const MAX_LOG_LINES = 400;
 const LIST_ROWS_CACHE_TTL_MS = 1200;
 const SCAN_REFRESH_INTERVAL_MS = 5000;
+const APP_KV_MAX_KEY_LENGTH = 256;
+const APP_FILE_READ_MAX_BYTES = 500000;
 
 let dbPromise = null;
 
@@ -22,6 +24,13 @@ let appsRowsCache = null;
 let scanInFlight = null;
 let lastScanAt = 0;
 let hasCompletedInitialScan = false;
+let writeQueue = Promise.resolve();
+
+function runSerializedWrite(task) {
+  const run = writeQueue.then(task, task);
+  writeQueue = run.catch(() => {});
+  return run;
+}
 
 function resolveToolHubRoot() {
   return path.join(app.getPath("home"), TOOL_HUB_ROOT_DIR);
@@ -87,6 +96,17 @@ async function initDb() {
     );
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS app_kv (
+      app_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (app_id, key),
+      FOREIGN KEY(app_id) REFERENCES apps(id)
+    );
+  `);
+
   return db;
 }
 
@@ -111,6 +131,99 @@ function normalizeTabId(value, fallback) {
     return "workspace";
   }
   return normalized;
+}
+
+function normalizeStorageKey(keyInput) {
+  const key = String(keyInput ?? "").trim();
+  if (!key) {
+    throw new Error("Storage key is required.");
+  }
+  if (key.length > APP_KV_MAX_KEY_LENGTH) {
+    throw new Error(`Storage key too long. Max length is ${APP_KV_MAX_KEY_LENGTH}.`);
+  }
+  if (key.includes("\0")) {
+    throw new Error("Storage key contains invalid character.");
+  }
+  return key;
+}
+
+function normalizeStoragePrefix(prefixInput) {
+  const prefix = String(prefixInput ?? "").trim();
+  if (!prefix) {
+    return "";
+  }
+  if (prefix.length > APP_KV_MAX_KEY_LENGTH) {
+    throw new Error(`Storage prefix too long. Max length is ${APP_KV_MAX_KEY_LENGTH}.`);
+  }
+  if (prefix.includes("\0")) {
+    throw new Error("Storage prefix contains invalid character.");
+  }
+  return prefix;
+}
+
+function serializeStorageValue(valueInput) {
+  if (typeof valueInput === "undefined") {
+    throw new Error("Storage value cannot be undefined.");
+  }
+  const json = JSON.stringify(valueInput);
+  if (typeof json !== "string") {
+    throw new Error("Storage value is not serializable.");
+  }
+  return json;
+}
+
+function deserializeStorageValue(valueJson, fallback = null) {
+  try {
+    return JSON.parse(String(valueJson ?? "null"));
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeAppRelativeFilePath(input) {
+  const value = String(input ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!value) {
+    throw new Error("File path is required.");
+  }
+  if (value.includes("\0")) {
+    throw new Error("Invalid file path.");
+  }
+  return value;
+}
+
+function resolveAppFilePath(appDir, filePathInput) {
+  const normalizedPath = normalizeAppRelativeFilePath(filePathInput);
+  const absolutePath = path.resolve(appDir, normalizedPath);
+  const relative = path.relative(appDir, absolutePath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("File path is outside app directory.");
+  }
+  return {
+    absolutePath,
+    filePath: relative.replace(/\\/g, "/"),
+  };
+}
+
+function normalizeSystemAbsoluteFilePath(filePathInput) {
+  const value = String(filePathInput ?? "").trim();
+  if (!value) {
+    throw new Error("Absolute file path is required.");
+  }
+  if (value.includes("\0")) {
+    throw new Error("Invalid file path.");
+  }
+  if (!path.isAbsolute(value)) {
+    throw new Error("Absolute file path is required.");
+  }
+  return path.resolve(value);
+}
+
+function normalizeMaxReadBytes(maxBytesInput) {
+  const numeric = Number(maxBytesInput);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return APP_FILE_READ_MAX_BYTES;
+  }
+  return Math.max(1024, Math.min(5_000_000, Math.floor(numeric)));
 }
 
 async function readManifest(appDir) {
@@ -309,70 +422,74 @@ function hasAppRecordChanged(existing, incoming, tabId) {
 }
 
 async function syncDiscoveredApps(discovered) {
-  const db = await getDb();
-  const existingRows = await db.all(
-    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json FROM apps",
-  );
-  const existingById = new Map(existingRows.map((row) => [row.id, row]));
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    const existingRows = await db.all(
+      "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json FROM apps",
+    );
+    const existingById = new Map(existingRows.map((row) => [row.id, row]));
 
-  let changed = false;
-  await db.exec("BEGIN");
-  try {
-    const now = Date.now();
-    const discoveredIds = new Set(discovered.map((item) => item.id));
+    let changed = false;
+    await db.exec("BEGIN IMMEDIATE");
+    try {
+      const now = Date.now();
+      const discoveredIds = new Set(discovered.map((item) => item.id));
 
-    for (const row of existingRows) {
-      if (!discoveredIds.has(row.id)) {
+      for (const row of existingRows) {
+        if (!discoveredIds.has(row.id)) {
+          changed = true;
+          await db.run("DELETE FROM app_kv WHERE app_id = ?", row.id);
+          await db.run("DELETE FROM app_runs WHERE app_id = ?", row.id);
+          await db.run("DELETE FROM apps WHERE id = ?", row.id);
+        }
+      }
+
+      for (const item of discovered) {
+        const existing = existingById.get(item.id);
+        const persistedTabId = existing
+          ? normalizeTabId(existing.tab_id, "workspace")
+          : "workspace";
+        if (!hasAppRecordChanged(existing, item, persistedTabId)) {
+          continue;
+        }
+
         changed = true;
-        await db.run("DELETE FROM apps WHERE id = ?", row.id);
+        await db.run(
+          `INSERT INTO apps(id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             version = excluded.version,
+             app_dir = excluded.app_dir,
+             entry_rel = excluded.entry_rel,
+             ui_kind = excluded.ui_kind,
+             ui_value = excluded.ui_value,
+             env_json = excluded.env_json,
+             updated_at = excluded.updated_at`,
+          item.id,
+          item.name,
+          item.version,
+          persistedTabId,
+          item.appDir,
+          item.entryRel,
+          item.uiKind,
+          item.uiValue,
+          item.envJson,
+          now,
+        );
       }
+
+      await db.exec("COMMIT");
+    } catch (error) {
+      await db.exec("ROLLBACK");
+      throw error;
     }
 
-    for (const item of discovered) {
-      const existing = existingById.get(item.id);
-      const persistedTabId = existing
-        ? normalizeTabId(existing.tab_id, "workspace")
-        : "workspace";
-      if (!hasAppRecordChanged(existing, item, persistedTabId)) {
-        continue;
-      }
-
-      changed = true;
-      await db.run(
-        `INSERT INTO apps(id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           name = excluded.name,
-           version = excluded.version,
-           app_dir = excluded.app_dir,
-           entry_rel = excluded.entry_rel,
-           ui_kind = excluded.ui_kind,
-           ui_value = excluded.ui_value,
-           env_json = excluded.env_json,
-           updated_at = excluded.updated_at`,
-        item.id,
-        item.name,
-        item.version,
-        persistedTabId,
-        item.appDir,
-        item.entryRel,
-        item.uiKind,
-        item.uiValue,
-        item.envJson,
-        now,
-      );
+    if (changed) {
+      invalidateAppsRowsCache();
     }
-
-    await db.exec("COMMIT");
-  } catch (error) {
-    await db.exec("ROLLBACK");
-    throw error;
-  }
-
-  if (changed) {
-    invalidateAppsRowsCache();
-  }
-  return changed;
+    return changed;
+  });
 }
 
 async function scanAndSyncApps(options = {}) {
@@ -385,23 +502,33 @@ async function scanAndSyncApps(options = {}) {
     return scanInFlight;
   }
 
-  scanInFlight = (async () => {
+  const currentScan = (async () => {
     const discovered = await scanAppsIncrementally();
     await syncDiscoveredApps(discovered);
     lastScanAt = Date.now();
     hasCompletedInitialScan = true;
   })();
+  scanInFlight = currentScan;
 
   if (background) {
-    void scanInFlight.catch((error) => {
-      console.error("Apps scan failed:", error);
-    });
+    void currentScan
+      .catch((error) => {
+        console.error("Apps scan failed:", error);
+      })
+      .finally(() => {
+        if (scanInFlight === currentScan) {
+          scanInFlight = null;
+        }
+      });
+    return;
   }
 
   try {
-    await scanInFlight;
+    await currentScan;
   } finally {
-    scanInFlight = null;
+    if (scanInFlight === currentScan) {
+      scanInFlight = null;
+    }
   }
 }
 
@@ -477,27 +604,271 @@ async function getAppById(appId) {
   return toAppView(record);
 }
 
-async function insertRun(appId, pid) {
+async function ensureStorageAppExists(db, appIdInput) {
+  const appId = normalizeAppId(appIdInput, "");
+  if (!appId) {
+    throw new Error("Invalid app id.");
+  }
+
+  const existing = await db.get("SELECT id FROM apps WHERE id = ?", appId);
+  if (!existing) {
+    throw new Error(`App not found: ${appId}`);
+  }
+  return appId;
+}
+
+async function getAppStorageValue(appIdInput, keyInput) {
   const db = await getDb();
-  const result = await db.run(
-    "INSERT INTO app_runs(app_id, pid, status, started_at) VALUES (?, ?, ?, ?)",
+  const appId = await ensureStorageAppExists(db, appIdInput);
+  const key = normalizeStorageKey(keyInput);
+  const row = await db.get(
+    "SELECT value_json, updated_at FROM app_kv WHERE app_id = ? AND key = ?",
     appId,
-    pid,
-    "running",
-    Date.now(),
+    key,
   );
-  return result.lastID;
+  if (!row) {
+    return {
+      key,
+      found: false,
+      value: null,
+      updatedAt: null,
+    };
+  }
+
+  return {
+    key,
+    found: true,
+    value: deserializeStorageValue(row.value_json, null),
+    updatedAt: Number(row.updated_at ?? Date.now()),
+  };
+}
+
+async function setAppStorageValue(appIdInput, keyInput, valueInput) {
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    const appId = await ensureStorageAppExists(db, appIdInput);
+    const key = normalizeStorageKey(keyInput);
+    const valueJson = serializeStorageValue(valueInput);
+    const updatedAt = Date.now();
+    await db.run(
+      `INSERT INTO app_kv(app_id, key, value_json, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(app_id, key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at = excluded.updated_at`,
+      appId,
+      key,
+      valueJson,
+      updatedAt,
+    );
+
+    return {
+      key,
+      value: deserializeStorageValue(valueJson, null),
+      updatedAt,
+    };
+  });
+}
+
+async function deleteAppStorageKey(appIdInput, keyInput) {
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    const appId = await ensureStorageAppExists(db, appIdInput);
+    const key = normalizeStorageKey(keyInput);
+    const result = await db.run(
+      "DELETE FROM app_kv WHERE app_id = ? AND key = ?",
+      appId,
+      key,
+    );
+    return {
+      key,
+      deleted: Number(result?.changes ?? 0) > 0,
+    };
+  });
+}
+
+async function listAppStorage(appIdInput, prefixInput = "") {
+  const db = await getDb();
+  const appId = await ensureStorageAppExists(db, appIdInput);
+  const prefix = normalizeStoragePrefix(prefixInput);
+  const rows = prefix
+    ? await db.all(
+      `SELECT key, value_json, updated_at
+       FROM app_kv
+       WHERE app_id = ? AND key LIKE ?
+       ORDER BY key ASC`,
+      appId,
+      `${prefix}%`,
+    )
+    : await db.all(
+      `SELECT key, value_json, updated_at
+       FROM app_kv
+       WHERE app_id = ?
+       ORDER BY key ASC`,
+      appId,
+    );
+
+  return rows.map((row) => ({
+    key: String(row.key),
+    value: deserializeStorageValue(row.value_json, null),
+    updatedAt: Number(row.updated_at ?? Date.now()),
+  }));
+}
+
+async function clearAppStorage(appIdInput) {
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    const appId = await ensureStorageAppExists(db, appIdInput);
+    const result = await db.run("DELETE FROM app_kv WHERE app_id = ?", appId);
+    return {
+      deletedCount: Number(result?.changes ?? 0),
+    };
+  });
+}
+
+async function readAppFile(appIdInput, filePathInput, optionsInput = {}) {
+  const db = await getDb();
+  const appId = await ensureStorageAppExists(db, appIdInput);
+  const record = await db.get("SELECT app_dir FROM apps WHERE id = ?", appId);
+  if (!record?.app_dir) {
+    throw new Error(`App directory not found: ${appId}`);
+  }
+
+  const { absolutePath, filePath } = resolveAppFilePath(record.app_dir, filePathInput);
+  const stat = await fs.promises.stat(absolutePath);
+  if (!stat.isFile()) {
+    throw new Error(`Target is not a file: ${filePath}`);
+  }
+
+  const maxBytes = normalizeMaxReadBytes(optionsInput?.maxBytes);
+  const buffer = await fs.promises.readFile(absolutePath);
+  const truncated = buffer.byteLength > maxBytes;
+  const content = truncated
+    ? buffer.subarray(0, maxBytes).toString("utf8")
+    : buffer.toString("utf8");
+
+  return {
+    path: filePath,
+    content,
+    truncated,
+    size: buffer.byteLength,
+  };
+}
+
+async function writeAppFile(appIdInput, filePathInput, contentInput, optionsInput = {}) {
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    const appId = await ensureStorageAppExists(db, appIdInput);
+    const record = await db.get("SELECT app_dir FROM apps WHERE id = ?", appId);
+    if (!record?.app_dir) {
+      throw new Error(`App directory not found: ${appId}`);
+    }
+
+    const { absolutePath, filePath } = resolveAppFilePath(record.app_dir, filePathInput);
+    const content = String(contentInput ?? "");
+    const append = optionsInput?.append === true;
+    const createDirs = optionsInput?.createDirs !== false;
+
+    if (createDirs) {
+      await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
+    }
+
+    if (append) {
+      await fs.promises.appendFile(absolutePath, content, "utf8");
+    } else {
+      await fs.promises.writeFile(absolutePath, content, "utf8");
+    }
+
+    const stat = await fs.promises.stat(absolutePath);
+    return {
+      path: filePath,
+      size: stat.size,
+      appended: append,
+    };
+  });
+}
+
+async function readSystemFile(appIdInput, filePathInput, optionsInput = {}) {
+  const db = await getDb();
+  await ensureStorageAppExists(db, appIdInput);
+
+  const absolutePath = normalizeSystemAbsoluteFilePath(filePathInput);
+  const stat = await fs.promises.stat(absolutePath);
+  if (!stat.isFile()) {
+    throw new Error(`Target is not a file: ${absolutePath}`);
+  }
+
+  const maxBytes = normalizeMaxReadBytes(optionsInput?.maxBytes);
+  const encoding = String(optionsInput?.encoding || "utf8");
+  const buffer = await fs.promises.readFile(absolutePath);
+  const truncated = buffer.byteLength > maxBytes;
+  const content = truncated
+    ? buffer.subarray(0, maxBytes).toString(encoding)
+    : buffer.toString(encoding);
+
+  return {
+    path: absolutePath,
+    content,
+    truncated,
+    size: buffer.byteLength,
+  };
+}
+
+async function writeSystemFile(appIdInput, filePathInput, contentInput, optionsInput = {}) {
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    await ensureStorageAppExists(db, appIdInput);
+
+    const absolutePath = normalizeSystemAbsoluteFilePath(filePathInput);
+    const content = String(contentInput ?? "");
+    const append = optionsInput?.append === true;
+    const createDirs = optionsInput?.createDirs === true;
+    const encoding = String(optionsInput?.encoding || "utf8");
+
+    if (createDirs) {
+      await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
+    }
+
+    if (append) {
+      await fs.promises.appendFile(absolutePath, content, encoding);
+    } else {
+      await fs.promises.writeFile(absolutePath, content, encoding);
+    }
+
+    const stat = await fs.promises.stat(absolutePath);
+    return {
+      path: absolutePath,
+      size: stat.size,
+      appended: append,
+    };
+  });
+}
+
+async function insertRun(appId, pid) {
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    const result = await db.run(
+      "INSERT INTO app_runs(app_id, pid, status, started_at) VALUES (?, ?, ?, ?)",
+      appId,
+      pid,
+      "running",
+      Date.now(),
+    );
+    return result.lastID;
+  });
 }
 
 async function finishRun(runId, exitCode) {
-  const db = await getDb();
-  await db.run(
-    "UPDATE app_runs SET status = ?, ended_at = ?, exit_code = ? WHERE run_id = ?",
-    "stopped",
-    Date.now(),
-    Number.isInteger(exitCode) ? exitCode : null,
-    runId,
-  );
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    await db.run(
+      "UPDATE app_runs SET status = ?, ended_at = ?, exit_code = ? WHERE run_id = ?",
+      "stopped",
+      Date.now(),
+      Number.isInteger(exitCode) ? exitCode : null,
+      runId,
+    );
+  });
 }
 
 async function startApp(appId) {
@@ -562,9 +933,11 @@ function getAppLogs(appId) {
 }
 
 async function setAppTab(appId, tabId) {
-  const db = await getDb();
-  await db.run("UPDATE apps SET tab_id = ?, updated_at = ? WHERE id = ?", tabId, Date.now(), appId);
-  invalidateAppsRowsCache();
+  await runSerializedWrite(async () => {
+    const db = await getDb();
+    await db.run("UPDATE apps SET tab_id = ?, updated_at = ? WHERE id = ?", tabId, Date.now(), appId);
+    invalidateAppsRowsCache();
+  });
 }
 
 async function initializeAppsDatabase() {
@@ -602,16 +975,19 @@ async function removeApp(appIdInput) {
   fs.rmSync(targetDir, { recursive: true, force: true });
   manifestCacheByFolder.delete(path.basename(targetDir));
 
-  const db = await getDb();
-  await db.exec("BEGIN");
-  try {
-    await db.run("DELETE FROM app_runs WHERE app_id = ?", appId);
-    await db.run("DELETE FROM apps WHERE id = ?", appId);
-    await db.exec("COMMIT");
-  } catch (error) {
-    await db.exec("ROLLBACK");
-    throw error;
-  }
+  await runSerializedWrite(async () => {
+    const db = await getDb();
+    await db.exec("BEGIN IMMEDIATE");
+    try {
+      await db.run("DELETE FROM app_kv WHERE app_id = ?", appId);
+      await db.run("DELETE FROM app_runs WHERE app_id = ?", appId);
+      await db.run("DELETE FROM apps WHERE id = ?", appId);
+      await db.exec("COMMIT");
+    } catch (error) {
+      await db.exec("ROLLBACK");
+      throw error;
+    }
+  });
 
   invalidateAppsRowsCache();
   return listApps();
@@ -658,15 +1034,24 @@ async function initializeAppsManager() {
 }
 
 module.exports = {
+  clearAppStorage,
+  deleteAppStorageKey,
   getAppById,
   getAppLogs,
+  getAppStorageValue,
   initializeAppsDatabase,
   initializeAppsManager,
   installAppFromDirectory,
+  listAppStorage,
   listApps,
+  readAppFile,
+  readSystemFile,
   removeApp,
   resolveAppsRoot,
   resolveAppsDbPath,
+  setAppStorageValue,
   startApp,
   stopApp,
+  writeAppFile,
+  writeSystemFile,
 };

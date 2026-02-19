@@ -9,7 +9,6 @@ import type { TabDefinition } from "../types/settings";
 import {
   createGeneratorProject,
   detectClaudeCli,
-  generatorChatInProject,
   getGeneratorProjectTerminal,
   getGeneratorProject,
   getGeneratorSettings,
@@ -66,6 +65,8 @@ function emptyTerminalState(projectId = ""): GeneratorTerminalState {
     projectId,
     running: false,
     output: "",
+    outputSeq: 0,
+    lastChunk: "",
     startedAt: null,
     updatedAt: t,
     lastExitCode: null,
@@ -75,11 +76,40 @@ function emptyTerminalState(projectId = ""): GeneratorTerminalState {
   };
 }
 
+function buildClaudeLaunchCommand(input: string): string {
+  const source = String(input ?? "").trim();
+  if (!source) {
+    return "claude";
+  }
+  if (/["'`]/.test(source)) {
+    return source;
+  }
+  if (!/\s/.test(source)) {
+    return source;
+  }
+
+  const withArgsMatch = source.match(
+    /^((?:[A-Za-z]:[\\/]|\\\\)[^\r\n"]+?\.(?:exe|cmd|bat|ps1))(\s+.+)$/i,
+  );
+  if (withArgsMatch) {
+    const executablePath = withArgsMatch[1];
+    const argsText = withArgsMatch[2];
+    return executablePath.includes(" ") ? `"${executablePath}"${argsText}` : source;
+  }
+
+  const looksLikePath =
+    /^[A-Za-z]:[\\/]/.test(source) ||
+    source.startsWith("\\\\") ||
+    source.includes("\\") ||
+    source.includes("/") ||
+    /\.(exe|cmd|bat|ps1)$/i.test(source);
+  return looksLikePath ? `"${source}"` : source;
+}
+
 export function useGeneratorSession(options: UseGeneratorSessionOptions) {
   const generatorStatus = ref<"idle" | "loading" | "success" | "error">("idle");
   const generatorMessage = ref("Use Claude CLI to edit files in generator projects.");
   const claudeCliPath = ref("");
-  const generatorInput = ref("");
   const generatorProjectName = ref("");
   const generatorTabId = ref(options.tabs.value[0]?.id ?? "workspace");
 
@@ -92,11 +122,9 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
   const generatorFileTruncated = ref(false);
   const generatorFileLoading = ref(false);
   const generatorTerminal = ref<GeneratorTerminalState>(emptyTerminalState(""));
-  const generatorTerminalInput = ref("");
   const generatorTerminalStatus = ref<"idle" | "loading" | "success" | "error">("idle");
   const generatorTerminalMessage = ref("Embedded terminal is ready.");
 
-  let generatorProjectPollingTimer: ReturnType<typeof setInterval> | null = null;
   let generatorTerminalUnsubscribe: (() => void) | null = null;
 
   function syncGeneratorTabIdWithTabs() {
@@ -113,7 +141,6 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorFileContent.value = "";
     generatorFileTruncated.value = false;
     generatorTerminal.value = emptyTerminalState("");
-    generatorTerminalInput.value = "";
     generatorTerminalStatus.value = "idle";
     generatorTerminalMessage.value = "Embedded terminal is ready.";
   }
@@ -311,28 +338,6 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     }
   }
 
-  function stopGeneratorProjectPolling() {
-    if (generatorProjectPollingTimer) {
-      clearInterval(generatorProjectPollingTimer);
-      generatorProjectPollingTimer = null;
-    }
-  }
-
-  function startGeneratorProjectPolling(projectId: string) {
-    stopGeneratorProjectPolling();
-    generatorProjectPollingTimer = setInterval(() => {
-      void getGeneratorProject(projectId)
-        .then((detail) => {
-          generatorProject.value = detail;
-          upsertProjectSummary(toSummary(detail));
-          syncSelectedFilePath(detail);
-        })
-        .catch(() => {
-          // Ignore polling errors during transient CLI execution
-        });
-    }, 800);
-  }
-
   async function autoDetectClaudePath() {
     if (!isElectronRuntime()) {
       generatorStatus.value = "error";
@@ -410,59 +415,6 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     }
   }
 
-  async function sendGeneratorMessage() {
-    if (!isElectronRuntime()) {
-      generatorStatus.value = "error";
-      generatorMessage.value = "Chat is only available in Electron runtime.";
-      return;
-    }
-    if (!generatorProjectId.value) {
-      generatorStatus.value = "error";
-      generatorMessage.value = "Please select or create a generator project first.";
-      return;
-    }
-
-    const message = generatorInput.value.trim();
-    if (!message) {
-      generatorStatus.value = "error";
-      generatorMessage.value = "Please enter your requirement first.";
-      return;
-    }
-
-    generatorInput.value = "";
-    generatorStatus.value = "loading";
-    generatorMessage.value = "Claude is editing project files...";
-
-    const projectId = generatorProjectId.value;
-    try {
-      startGeneratorProjectPolling(projectId);
-      const result = await generatorChatInProject(
-        projectId,
-        message,
-        claudeCliPath.value.trim() || undefined,
-      );
-      generatorProject.value = result.project;
-      upsertProjectSummary(toSummary(result.project));
-      const selectedFile = syncSelectedFilePath(result.project);
-      if (selectedFile) {
-        await openGeneratorProjectFile(selectedFile);
-      }
-      await loadGeneratorProjects();
-      generatorStatus.value = "success";
-      generatorMessage.value = `Claude replied via ${result.cliPath}.`;
-    } catch (error) {
-      generatorStatus.value = "error";
-      generatorMessage.value = `Chat failed: ${formatError(error)}`;
-    } finally {
-      stopGeneratorProjectPolling();
-      try {
-        await refreshSelectedProject(projectId);
-      } catch {
-        // Ignore refresh failures after chat completion
-      }
-    }
-  }
-
   async function startEmbeddedTerminal() {
     if (!isElectronRuntime()) {
       generatorTerminalStatus.value = "error";
@@ -478,10 +430,23 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorTerminalStatus.value = "loading";
     generatorTerminalMessage.value = "Starting terminal...";
     try {
-      generatorTerminal.value = await startGeneratorProjectTerminal(generatorProjectId.value);
-      attachGeneratorTerminalSubscription(generatorProjectId.value);
-      generatorTerminalStatus.value = "success";
-      generatorTerminalMessage.value = "Terminal started.";
+      const projectId = generatorProjectId.value;
+      generatorTerminal.value = await startGeneratorProjectTerminal(projectId);
+      attachGeneratorTerminalSubscription(projectId);
+
+      const launchCommand = buildClaudeLaunchCommand(claudeCliPath.value);
+      try {
+        generatorTerminal.value = await sendGeneratorProjectTerminalInput(
+          projectId,
+          launchCommand,
+          true,
+        );
+        generatorTerminalStatus.value = "success";
+        generatorTerminalMessage.value = `Terminal started and launched: ${launchCommand}`;
+      } catch (error) {
+        generatorTerminalStatus.value = "error";
+        generatorTerminalMessage.value = `Terminal started, but Claude launch failed: ${formatError(error)}`;
+      }
     } catch (error) {
       generatorTerminalStatus.value = "error";
       generatorTerminalMessage.value = `Start terminal failed: ${formatError(error)}`;
@@ -502,45 +467,6 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     } catch (error) {
       generatorTerminalStatus.value = "error";
       generatorTerminalMessage.value = `Stop terminal failed: ${formatError(error)}`;
-    }
-  }
-
-  async function sendEmbeddedTerminalCommand() {
-    if (!isElectronRuntime()) {
-      generatorTerminalStatus.value = "error";
-      generatorTerminalMessage.value = "Terminal is only available in Electron runtime.";
-      return;
-    }
-    if (!generatorProjectId.value) {
-      generatorTerminalStatus.value = "error";
-      generatorTerminalMessage.value = "Please select a project first.";
-      return;
-    }
-    if (!generatorTerminal.value.running) {
-      generatorTerminalStatus.value = "error";
-      generatorTerminalMessage.value = "Terminal is not running. Start it first.";
-      return;
-    }
-
-    const commandText = generatorTerminalInput.value.trim();
-    if (!commandText) {
-      return;
-    }
-
-    generatorTerminalInput.value = "";
-    generatorTerminalStatus.value = "loading";
-    generatorTerminalMessage.value = "Sending command...";
-    try {
-      generatorTerminal.value = await sendGeneratorProjectTerminalInput(
-        generatorProjectId.value,
-        commandText,
-        true,
-      );
-      generatorTerminalStatus.value = "success";
-      generatorTerminalMessage.value = "Command sent.";
-    } catch (error) {
-      generatorTerminalStatus.value = "error";
-      generatorTerminalMessage.value = `Send command failed: ${formatError(error)}`;
     }
   }
 
@@ -628,7 +554,6 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorFileLoading,
     generatorFilePath,
     generatorFileTruncated,
-    generatorInput,
     generatorMessage,
     generatorProject,
     generatorProjectId,
@@ -637,7 +562,6 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorStatus,
     generatorTabId,
     generatorTerminal,
-    generatorTerminalInput,
     generatorTerminalMessage,
     generatorTerminalStatus,
     installAppFromGeneratorProject,
@@ -647,10 +571,7 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     openGeneratorProjectFile,
     saveClaudePathConfig,
     selectGeneratorProject,
-    sendGeneratorMessage,
-    sendEmbeddedTerminalCommand,
     startEmbeddedTerminal,
-    stopGeneratorProjectPolling,
     detachGeneratorTerminalSubscription,
     stopEmbeddedTerminal,
     sendEmbeddedTerminalData,

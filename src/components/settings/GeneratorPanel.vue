@@ -21,7 +21,6 @@ const {
     generatorStatus,
     generatorTabId,
     generatorTerminal,
-    generatorTerminalInput,
     generatorTerminalMessage,
     generatorTerminalStatus,
     installAppFromGeneratorProject,
@@ -33,22 +32,168 @@ const {
     saveClaudePathConfig,
     selectGeneratorProject,
     sendEmbeddedTerminalData,
-    sendEmbeddedTerminalCommand,
     startEmbeddedTerminal,
     stopEmbeddedTerminal,
     tabs,
 } = useToolHubState();
 
-const generatorFiles = computed(() => {
-    return (generatorProject.value?.files ?? []).filter(
-        (item) => item.type === "file",
-    );
+interface TreeNode {
+    path: string;
+    name: string;
+    type: "file" | "directory";
+    children: TreeNode[];
+}
+
+interface TreeRow {
+    node: TreeNode;
+    depth: number;
+    hasChildren: boolean;
+    expanded: boolean;
+}
+
+const expandedDirs = ref<Set<string>>(new Set());
+
+function buildTreeNodes(
+    entries: Array<{
+        path: string;
+        type: "file" | "directory";
+    }>,
+): TreeNode[] {
+    type BuildNode = {
+        path: string;
+        name: string;
+        type: "file" | "directory";
+        children: Map<string, BuildNode>;
+    };
+
+    const root: BuildNode = {
+        path: "",
+        name: "",
+        type: "directory",
+        children: new Map(),
+    };
+
+    function ensureDirectory(parts: string[]): BuildNode {
+        let current = root;
+        let currentPath = "";
+        for (const part of parts) {
+            currentPath = currentPath ? `${currentPath}/${part}` : part;
+            let next = current.children.get(part);
+            if (!next) {
+                next = {
+                    path: currentPath,
+                    name: part,
+                    type: "directory",
+                    children: new Map(),
+                };
+                current.children.set(part, next);
+            }
+            current = next;
+        }
+        return current;
+    }
+
+    const sorted = [...entries].sort((a, b) => a.path.localeCompare(b.path));
+    for (const entry of sorted) {
+        const parts = entry.path.split("/").filter(Boolean);
+        if (parts.length === 0) {
+            continue;
+        }
+
+        if (entry.type === "directory") {
+            ensureDirectory(parts);
+            continue;
+        }
+
+        const parent = ensureDirectory(parts.slice(0, -1));
+        const name = parts[parts.length - 1];
+        if (!parent.children.has(name)) {
+            parent.children.set(name, {
+                path: entry.path,
+                name,
+                type: "file",
+                children: new Map(),
+            });
+        }
+    }
+
+    function toTree(node: BuildNode): TreeNode[] {
+        const children = Array.from(node.children.values()).sort((a, b) => {
+            if (a.type !== b.type) {
+                return a.type === "directory" ? -1 : 1;
+            }
+            return a.name.localeCompare(b.name);
+        });
+
+        return children.map((child) => ({
+            path: child.path,
+            name: child.name,
+            type: child.type,
+            children: child.type === "directory" ? toTree(child) : [],
+        }));
+    }
+
+    return toTree(root);
+}
+
+const generatorTree = computed(() => {
+    return buildTreeNodes(generatorProject.value?.files ?? []);
 });
+
+const generatorTreeRows = computed<TreeRow[]>(() => {
+    const rows: TreeRow[] = [];
+    const expanded = expandedDirs.value;
+
+    function walk(nodes: TreeNode[], depth: number) {
+        for (const node of nodes) {
+            const hasChildren = node.children.length > 0;
+            const isExpanded =
+                node.type === "directory" &&
+                (expanded.has(node.path) || node.path === "");
+
+            rows.push({
+                node,
+                depth,
+                hasChildren,
+                expanded: isExpanded,
+            });
+
+            if (node.type === "directory" && isExpanded && hasChildren) {
+                walk(node.children, depth + 1);
+            }
+        }
+    }
+
+    walk(generatorTree.value, 0);
+    return rows;
+});
+
+function expandAllDirectories() {
+    const next = new Set<string>();
+    const entries = generatorProject.value?.files ?? [];
+    for (const entry of entries) {
+        if (entry.type === "directory") {
+            next.add(entry.path);
+        }
+    }
+    expandedDirs.value = next;
+}
+
+function toggleDirectory(path: string) {
+    const next = new Set(expandedDirs.value);
+    if (next.has(path)) {
+        next.delete(path);
+    } else {
+        next.add(path);
+    }
+    expandedDirs.value = next;
+}
 
 const terminalHost = ref<HTMLElement | null>(null);
 let xterm: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let renderedOutput = "";
+let renderedSeq = 0;
 let removeResizeListener: (() => void) | null = null;
 
 function formatTime(value: number): string {
@@ -72,28 +217,64 @@ function handleFileOpen(filePath: string) {
     void openGeneratorProjectFile(filePath);
 }
 
-function syncTerminalOutput(output: string) {
+function writeTerminalWithScrollRetention(chunk: string) {
+    if (!xterm || !chunk) {
+        return;
+    }
+    const previousViewportY = xterm.buffer.active.viewportY;
+    const previousBaseY = xterm.buffer.active.baseY;
+    const pinnedToBottom = previousViewportY >= previousBaseY;
+
+    xterm.write(chunk, () => {
+        if (!xterm) {
+            return;
+        }
+        if (!pinnedToBottom) {
+            xterm.scrollToLine(previousViewportY);
+        }
+    });
+}
+
+function syncTerminalOutput(state: {
+    output: string;
+    outputSeq: number;
+    lastChunk: string;
+}) {
     if (!xterm) {
         return;
     }
 
-    const nextOutput = output || "";
+    const nextOutput = state.output || "";
+    const nextSeq = Number(state.outputSeq || 0);
+    const nextChunk = state.lastChunk || "";
     if (!nextOutput) {
         xterm.reset();
         renderedOutput = "";
+        renderedSeq = 0;
         return;
     }
 
-    if (nextOutput.startsWith(renderedOutput)) {
-        const delta = nextOutput.slice(renderedOutput.length);
-        if (delta) {
-            xterm.write(delta);
-        }
-    } else {
-        xterm.reset();
-        xterm.write(nextOutput);
+    if (
+        nextSeq > renderedSeq &&
+        nextChunk &&
+        nextOutput.startsWith(renderedOutput) &&
+        nextOutput.endsWith(nextChunk)
+    ) {
+        writeTerminalWithScrollRetention(nextChunk);
+        renderedOutput = nextOutput;
+        renderedSeq = nextSeq;
+        return;
     }
+
+    if (nextOutput === renderedOutput) {
+        renderedSeq = nextSeq;
+        return;
+    }
+
+    xterm.reset();
+    writeTerminalWithScrollRetention(nextOutput);
     renderedOutput = nextOutput;
+    renderedSeq = nextSeq;
 }
 
 function fitTerminal() {
@@ -126,7 +307,11 @@ onMounted(() => {
         xterm.open(terminalHost.value);
         nextTick(() => {
             fitTerminal();
-            syncTerminalOutput(generatorTerminal.value.output);
+            syncTerminalOutput({
+                output: generatorTerminal.value.output,
+                outputSeq: generatorTerminal.value.outputSeq,
+                lastChunk: generatorTerminal.value.lastChunk,
+            });
         });
     }
 
@@ -146,6 +331,7 @@ onBeforeUnmount(() => {
     xterm = null;
     fitAddon = null;
     renderedOutput = "";
+    renderedSeq = 0;
 });
 
 watch(
@@ -155,7 +341,9 @@ watch(
         if (xterm) {
             xterm.reset();
         }
+        renderedSeq = 0;
         if (projectId) {
+            expandAllDirectories();
             void loadGeneratorTerminalState(projectId);
             nextTick(() => {
                 fitTerminal();
@@ -165,9 +353,17 @@ watch(
 );
 
 watch(
-    () => generatorTerminal.value.output,
-    (output) => {
-        syncTerminalOutput(output);
+    [
+        () => generatorTerminal.value.output,
+        () => generatorTerminal.value.outputSeq,
+        () => generatorTerminal.value.lastChunk,
+    ],
+    ([output, outputSeq, lastChunk]) => {
+        syncTerminalOutput({
+            output,
+            outputSeq,
+            lastChunk,
+        });
     },
 );
 
@@ -239,7 +435,7 @@ watch(
             </select>
         </div>
 
-        <div class="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
+        <div class="mt-2 grid gap-2 md:grid-cols-[1fr_auto_auto]">
             <input
                 v-model="generatorProjectName"
                 type="text"
@@ -253,16 +449,21 @@ watch(
             >
                 Create Project
             </button>
+            <button
+                type="button"
+                class="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-emerald-400"
+                @click="installAppFromGeneratorProject"
+            >
+                Install Project App
+            </button>
         </div>
 
-        <div class="mt-4 grid gap-3 xl:grid-cols-[260px_320px_1fr]">
+        <div class="mt-4 grid gap-3 xl:grid-cols-[minmax(180px,0.55fr)_minmax(700px,2.45fr)]">
             <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                <p
-                    class="text-xs font-semibold uppercase tracking-wide text-slate-400"
-                >
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
                     Projects
                 </p>
-                <div class="mt-2 max-h-64 space-y-2 overflow-auto pr-1">
+                <div class="mt-2 max-h-[clamp(360px,58vh,760px)] space-y-2 overflow-auto pr-1">
                     <button
                         v-for="project in generatorProjects"
                         :key="project.projectId"
@@ -277,12 +478,9 @@ watch(
                     >
                         <p class="font-medium">{{ project.projectId }}</p>
                         <p class="mt-1 text-slate-400">
-                            {{ project.fileCount }} files ·
-                            {{ project.messageCount }} msgs
+                            {{ project.fileCount }} files · {{ project.messageCount }} msgs
                         </p>
-                        <p class="mt-1 text-slate-500">
-                            {{ project.running ? "running" : "idle" }}
-                        </p>
+                        <p class="mt-1 text-slate-500">{{ project.running ? "running" : "idle" }}</p>
                     </button>
                     <p
                         v-if="generatorProjects.length === 0"
@@ -293,48 +491,14 @@ watch(
                 </div>
             </div>
 
-            <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                <p
-                    class="text-xs font-semibold uppercase tracking-wide text-slate-400"
-                >
-                    Files
-                </p>
-                <div class="mt-2 max-h-64 space-y-1 overflow-auto pr-1">
-                    <button
-                        v-for="file in generatorFiles"
-                        :key="`generator-file-${file.path}`"
-                        type="button"
-                        class="w-full rounded-md border px-2 py-1.5 text-left text-xs transition"
-                        :class="
-                            file.path === generatorFilePath
-                                ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
-                                : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-400 hover:text-cyan-200'
-                        "
-                        @click="handleFileOpen(file.path)"
-                    >
-                        {{ file.path }}
-                    </button>
-                    <p
-                        v-if="generatorFiles.length === 0"
-                        class="text-xs text-slate-500"
-                    >
-                        Select a project to browse files.
-                    </p>
-                </div>
-            </div>
-
             <div class="space-y-3">
                 <div
                     class="rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-xs text-slate-300"
                 >
                     <p v-if="generatorProject">
-                        Project: <code>{{ generatorProject.projectId }}</code
-                        ><br />
-                        Path: <code>{{ generatorProject.projectDir }}</code
-                        ><br />
-                        Updated:
-                        <code>{{ formatTime(generatorProject.updatedAt) }}</code
-                        ><br />
+                        Project: <code>{{ generatorProject.projectId }}</code><br />
+                        Path: <code>{{ generatorProject.projectDir }}</code><br />
+                        Updated: <code>{{ formatTime(generatorProject.updatedAt) }}</code><br />
                         Manifest:
                         <code>
                             {{
@@ -347,146 +511,75 @@ watch(
                     <p v-else>Select or create a project.</p>
                 </div>
 
-                <div
-                    v-if="generatorProject"
-                    class="rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-xs text-slate-300"
-                >
-                    <p class="font-medium text-slate-200">Claude CLI Output</p>
-                    <pre
-                        class="mt-2 max-h-36 overflow-auto whitespace-pre-wrap"
-                        >{{
-                            generatorProject.runningOutput ||
-                            (generatorProject.running
-                                ? "Claude 正在运行，等待输出..."
-                                : "No output yet.")
-                        }}</pre
-                    >
-                </div>
-
-                <div
-                    class="rounded-xl border border-slate-700 bg-slate-950/80 p-3"
-                >
-                    <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="grid gap-3 xl:grid-cols-[minmax(260px,0.9fr)_minmax(420px,1.8fr)]">
+                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                            Embedded Terminal
+                            Files
                         </p>
-                        <div class="flex items-center gap-2">
-                            <span
-                                class="rounded-md px-2 py-1 text-[11px]"
+                        <div class="mt-2 max-h-[clamp(320px,50vh,700px)] space-y-1 overflow-auto pr-1">
+                            <button
+                                v-for="row in generatorTreeRows"
+                                :key="`generator-entry-${row.node.path}`"
+                                type="button"
+                                class="w-full rounded-md border px-2 py-1.5 text-left text-xs transition"
                                 :class="
-                                    generatorTerminal.running
-                                        ? 'bg-emerald-500/20 text-emerald-200'
-                                        : 'bg-slate-800 text-slate-300'
+                                    row.node.type === 'directory'
+                                        ? 'border-slate-700/80 bg-slate-900/40 text-slate-400'
+                                        : row.node.path === generatorFilePath
+                                          ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
+                                          : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-400 hover:text-cyan-200'
+                                "
+                                @click="
+                                    row.node.type === 'directory'
+                                        ? toggleDirectory(row.node.path)
+                                        : handleFileOpen(row.node.path)
                                 "
                             >
-                                {{ generatorTerminal.running ? "running" : "stopped" }}
-                            </span>
-                            <button
-                                type="button"
-                                class="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
-                                @click="loadGeneratorTerminalState()"
-                            >
-                                Refresh
+                                <span
+                                    class="inline-block"
+                                    :style="{ paddingLeft: `${row.depth * 12}px` }"
+                                >
+                                    <span v-if="row.node.type === 'directory'">
+                                        {{ row.hasChildren ? (row.expanded ? "[-]" : "[+]") : "[ ]" }}
+                                        {{ row.node.name }}
+                                    </span>
+                                    <span v-else>
+                                        [F] {{ row.node.name }}
+                                    </span>
+                                </span>
                             </button>
-                            <button
-                                v-if="!generatorTerminal.running"
-                                type="button"
-                                class="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
-                                @click="startEmbeddedTerminal"
+                            <p
+                                v-if="generatorTreeRows.length === 0"
+                                class="text-xs text-slate-500"
                             >
-                                Start
-                            </button>
-                            <button
-                                v-else
-                                type="button"
-                                class="rounded-md border border-rose-500/40 px-2 py-1 text-[11px] text-rose-200 transition hover:border-rose-400 hover:text-rose-100"
-                                @click="stopEmbeddedTerminal"
-                            >
-                                Stop
-                            </button>
+                                Select a project to browse files.
+                            </p>
                         </div>
                     </div>
-                    <p class="mt-1 text-[11px] text-slate-500">
-                        {{ generatorTerminal.shellCommand || "-" }}
-                    </p>
-                    <div
-                        ref="terminalHost"
-                        class="mt-2 h-52 overflow-hidden rounded-md border border-slate-700 bg-slate-950"
-                    />
-                    <p class="mt-2 text-[11px] text-slate-500">
-                        Terminal keyboard input is forwarded directly to the PTY session.
-                    </p>
-                    <div class="mt-2 grid gap-2 md:grid-cols-[1fr_auto]">
-                        <input
-                            v-model="generatorTerminalInput"
-                            type="text"
-                            placeholder="Command in selected project directory (e.g. dir, claude)"
-                            class="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none ring-cyan-500/50 placeholder:text-slate-500 focus:ring"
-                            @keyup.enter="sendEmbeddedTerminalCommand"
-                        />
-                        <button
-                            type="button"
-                            class="rounded-md border border-slate-600 px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
-                            @click="sendEmbeddedTerminalCommand"
-                        >
-                            Run
-                        </button>
-                    </div>
-                    <div class="mt-2 flex items-center gap-2 text-[11px]">
-                        <span
-                            class="rounded-md px-2 py-1"
-                            :class="
-                                generatorTerminalStatus === 'success'
-                                    ? 'bg-emerald-500/20 text-emerald-200'
-                                    : generatorTerminalStatus === 'error'
-                                      ? 'bg-rose-500/20 text-rose-200'
-                                      : generatorTerminalStatus === 'loading'
-                                        ? 'bg-amber-500/20 text-amber-200'
-                                        : 'bg-slate-800 text-slate-300'
-                            "
-                        >
-                            {{ generatorTerminalStatus }}
-                        </span>
-                        <span class="text-slate-400">{{ generatorTerminalMessage }}</span>
-                    </div>
-                </div>
 
-                <div
-                    class="rounded-xl border border-slate-700 bg-slate-950/80 p-3"
-                >
-                    <div class="flex items-center justify-between gap-2">
+                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+                        <div class="flex items-center justify-between gap-2">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                File Content
+                            </p>
+                            <span class="text-xs text-slate-500">
+                                {{ generatorFileLoading ? "Loading..." : generatorFilePath || "-" }}
+                            </span>
+                        </div>
+                        <pre class="mt-2 max-h-[clamp(320px,50vh,700px)] overflow-auto whitespace-pre-wrap text-xs text-slate-200">{{
+                            generatorFileContent || "Select a file to view its content."
+                        }}</pre>
                         <p
-                            class="text-xs font-semibold uppercase tracking-wide text-slate-400"
+                            v-if="generatorFileTruncated"
+                            class="mt-2 text-xs text-amber-300"
                         >
-                            File Content
+                            File content is truncated due to size limit.
                         </p>
-                        <span class="text-xs text-slate-500">
-                            {{
-                                generatorFileLoading
-                                    ? "Loading..."
-                                    : generatorFilePath || "-"
-                            }}
-                        </span>
                     </div>
-                    <pre
-                        class="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-slate-200"
-                        >{{
-                            generatorFileContent ||
-                            "Select a file to view its content."
-                        }}</pre
-                    >
-                    <p
-                        v-if="generatorFileTruncated"
-                        class="mt-2 text-xs text-amber-300"
-                    >
-                        File content is truncated due to size limit.
-                    </p>
                 </div>
 
-                <div
-                    class="rounded-xl border border-slate-700 bg-slate-950/80 p-3"
-                >
-                    <div class="max-h-40 space-y-2 overflow-auto pr-1">
+                <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+                    <div class="max-h-[clamp(160px,24vh,300px)] space-y-2 overflow-auto pr-1">
                         <div
                             v-for="(
                                 item, index
@@ -495,8 +588,7 @@ watch(
                             class="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-xs"
                         >
                             <p class="uppercase tracking-wide text-slate-400">
-                                {{ item.role }} ·
-                                {{ formatTime(item.createdAt) }}
+                                {{ item.role }} · {{ formatTime(item.createdAt) }}
                             </p>
                             <p class="mt-1 whitespace-pre-wrap text-slate-200">
                                 {{ item.content }}
@@ -511,16 +603,74 @@ watch(
                             No Claude conversation history yet.
                         </p>
                     </div>
-                    <div class="mt-3">
-                        <button
-                            type="button"
-                            class="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-emerald-400"
-                            @click="installAppFromGeneratorProject"
-                        >
-                            Install Project App
-                        </button>
-                    </div>
                 </div>
+            </div>
+        </div>
+
+        <div class="mt-4 rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Embedded Terminal
+                </p>
+                <div class="flex items-center gap-2">
+                    <span
+                        class="rounded-md px-2 py-1 text-[11px]"
+                        :class="
+                            generatorTerminal.running
+                                ? 'bg-emerald-500/20 text-emerald-200'
+                                : 'bg-slate-800 text-slate-300'
+                        "
+                    >
+                        {{ generatorTerminal.running ? "running" : "stopped" }}
+                    </span>
+                    <button
+                        type="button"
+                        class="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
+                        @click="loadGeneratorTerminalState()"
+                    >
+                        Refresh
+                    </button>
+                    <button
+                        v-if="!generatorTerminal.running"
+                        type="button"
+                        class="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
+                        @click="startEmbeddedTerminal"
+                    >
+                        Start Claude
+                    </button>
+                    <button
+                        v-else
+                        type="button"
+                        class="rounded-md border border-rose-500/40 px-2 py-1 text-[11px] text-rose-200 transition hover:border-rose-400 hover:text-rose-100"
+                        @click="stopEmbeddedTerminal"
+                    >
+                        Stop
+                    </button>
+                </div>
+            </div>
+            <p class="mt-1 text-[11px] text-slate-500">
+                {{ generatorTerminal.shellCommand || "-" }}
+            </p>
+            <div
+                ref="terminalHost"
+                class="mt-2 h-[clamp(360px,48vh,700px)] overflow-hidden rounded-md border border-slate-700 bg-slate-950"
+            />
+            <div class="mt-2 flex items-center gap-2 text-[11px]">
+                <span
+                    class="rounded-md px-2 py-1"
+                    :class="
+                        generatorTerminalStatus === 'success'
+                            ? 'bg-emerald-500/20 text-emerald-200'
+                            : generatorTerminalStatus === 'error'
+                              ? 'bg-rose-500/20 text-rose-200'
+                              : generatorTerminalStatus === 'loading'
+                                ? 'bg-amber-500/20 text-amber-200'
+                                : 'bg-slate-800 text-slate-300'
+                    "
+                >
+                    {{ generatorTerminalStatus }}
+                </span>
+                <span class="text-slate-400">{{ generatorTerminalMessage }}</span>
             </div>
         </div>
 

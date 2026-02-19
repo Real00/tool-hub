@@ -102,7 +102,6 @@ function createToolHubState() {
     generatorFileLoading,
     generatorFilePath,
     generatorFileTruncated,
-    generatorInput,
     generatorMessage,
     generatorProject,
     generatorProjectId,
@@ -111,7 +110,6 @@ function createToolHubState() {
     generatorStatus,
     generatorTabId,
     generatorTerminal,
-    generatorTerminalInput,
     generatorTerminalMessage,
     generatorTerminalStatus,
     installAppFromGeneratorProject,
@@ -123,10 +121,7 @@ function createToolHubState() {
     saveClaudePathConfig,
     selectGeneratorProject,
     sendEmbeddedTerminalData,
-    sendGeneratorMessage,
-    sendEmbeddedTerminalCommand,
     startEmbeddedTerminal,
-    stopGeneratorProjectPolling,
     detachGeneratorTerminalSubscription,
     stopEmbeddedTerminal,
     syncGeneratorTabIdWithTabs,
@@ -258,6 +253,30 @@ function createToolHubState() {
 
   function removeTabRow(index: number) {
     tabDraft.value.splice(index, 1);
+  }
+
+  function moveTabRowTo(fromIndex: number, toIndex: number) {
+    if (fromIndex < 0 || fromIndex >= tabDraft.value.length) {
+      return;
+    }
+
+    const next = [...tabDraft.value];
+    const [item] = next.splice(fromIndex, 1);
+    if (!item) {
+      return;
+    }
+
+    const boundedToIndex = Math.max(0, Math.min(next.length, toIndex));
+    next.splice(boundedToIndex, 0, item);
+    tabDraft.value = next;
+  }
+
+  function moveTabRow(index: number, direction: "up" | "down") {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= tabDraft.value.length) {
+      return;
+    }
+    moveTabRowTo(index, targetIndex);
   }
 
   function autofillTabId(index: number) {
@@ -436,20 +455,6 @@ function createToolHubState() {
     }
   }
 
-  async function startNodeApp(appId: string) {
-    appsStatus.value = "loading";
-    try {
-      const list = await startApp(appId);
-      applyApps(list);
-      appsStatus.value = "success";
-      appsMessage.value = `App started: ${appId}`;
-      await loadAppLogs(appId);
-    } catch (error) {
-      appsStatus.value = "error";
-      appsMessage.value = `Start failed: ${formatError(error)}`;
-    }
-  }
-
   async function stopNodeApp(appId: string) {
     appsStatus.value = "loading";
     try {
@@ -465,13 +470,19 @@ function createToolHubState() {
   }
 
   async function openNodeAppWindow(appId: string) {
+    appsStatus.value = "loading";
+    appsMessage.value = `Opening app: ${appId}...`;
     try {
+      // Open action now also ensures backend runtime is started.
+      const list = await startApp(appId);
+      applyApps(list);
       await openAppWindow(appId);
       appsStatus.value = "success";
-      appsMessage.value = `Opened app window: ${appId}`;
+      appsMessage.value = `App opened: ${appId}`;
+      await loadAppLogs(appId);
     } catch (error) {
       appsStatus.value = "error";
-      appsMessage.value = `Open window failed: ${formatError(error)}`;
+      appsMessage.value = `Open failed: ${formatError(error)}`;
     }
   }
 
@@ -545,7 +556,6 @@ function createToolHubState() {
       clearInterval(appsPollingTimer);
       appsPollingTimer = null;
     }
-    stopGeneratorProjectPolling();
     detachGeneratorTerminalSubscription();
   }
 
@@ -572,7 +582,6 @@ function createToolHubState() {
     generatorFileLoading,
     generatorFilePath,
     generatorFileTruncated,
-    generatorInput,
     generatorMessage,
     generatorProject,
     generatorProjectId,
@@ -581,7 +590,6 @@ function createToolHubState() {
     generatorStatus,
     generatorTabId,
     generatorTerminal,
-    generatorTerminalInput,
     generatorTerminalMessage,
     generatorTerminalStatus,
     init,
@@ -602,6 +610,8 @@ function createToolHubState() {
     logsStatus,
     openGeneratorProjectFile,
     openNodeAppWindow,
+    moveTabRow,
+    moveTabRowTo,
     removeNodeApp,
     removeTabRow,
     runtimeLabel,
@@ -610,14 +620,10 @@ function createToolHubState() {
     saveTabsToStorage,
     selectGeneratorProject,
     sendEmbeddedTerminalData,
-    sendEmbeddedTerminalCommand,
-    sendGeneratorMessage,
     settingsMessage,
     settingsStatus,
     showOverview,
-    startNodeApp,
     startEmbeddedTerminal,
-    stopGeneratorProjectPolling,
     detachGeneratorTerminalSubscription,
     stopEmbeddedTerminal,
     stopNodeApp,

@@ -2,6 +2,14 @@
 
 本文档合并了基础与进阶内容，目标是让你从模板快速走到可维护、可扩展的业务应用。
 
+## 给 AI 助手的快速规则
+
+- 先读 `app.json`，确保 `id/name/version/entry/uiPath` 保持有效。
+- 修改代码后，必须保证 `entry` 与 `uiPath` 指向的文件真实存在。
+- 不要在 `app.json` 里写分类信息，分类由宿主 SQLite 的 `apps.tab_id` 管理。
+- 默认做最小可运行改动，优先修复可验证问题，再做结构化优化。
+- 涉及运行时状态时，优先写到应用目录内的 `runtime/`，避免污染源码目录。
+
 ## 1. 运行模型（先理解这个）
 
 Tool Hub 中一个应用由两部分组成：
@@ -124,6 +132,11 @@ ui/
 - UI 用 `fetch` 调用
 - 端口放到 `env`，返回统一 JSON
 
+注意：
+
+- 适合你有跨进程业务协议需求的场景。
+- 访问系统保护路径（如 `hosts`）写入通常需要管理员权限。
+
 ### 8.2 文件轮询
 
 - Node 写 `runtime/state.json`
@@ -176,6 +189,38 @@ CREATE TABLE IF NOT EXISTS kv_config (
 - DB 初始化放启动阶段一次完成
 - 高频写入做节流
 - 升级使用 migration，不直接删库
+
+### 9.3 宿主存储/文件 API（推荐给 UI 侧）
+
+Tool Hub 会在应用 UI 窗口注入 `window.toolHubAppApi`，可直接使用宿主提供的文件与 SQLite 能力（按 `appId` 自动隔离）。
+
+可用方法：
+
+- `window.toolHubAppApi.getRuntimeInfo()` -> `{ appId }`
+- `window.toolHubAppApi.files.read(path, options?)` -> `{ path, content, truncated, size }`
+- `window.toolHubAppApi.files.write(path, content, options?)` -> `{ path, size, appended }`
+- `window.toolHubAppApi.systemFiles.read(absPath, options?)` -> `{ path, content, truncated, size }`
+- `window.toolHubAppApi.systemFiles.write(absPath, content, options?)` -> `{ path, size, appended }`
+- `window.toolHubAppApi.storage.get(key)` -> `{ key, found, value, updatedAt }`
+- `window.toolHubAppApi.storage.set(key, value)` -> `{ key, value, updatedAt }`
+- `window.toolHubAppApi.storage.delete(key)` -> `{ key, deleted }`
+- `window.toolHubAppApi.storage.list(prefix?)` -> `Array<{ key, value, updatedAt }>`
+- `window.toolHubAppApi.storage.clear()` -> `{ deletedCount }`
+
+示例：
+
+```js
+await window.toolHubAppApi.files.write("runtime/note.txt", "hello\n");
+const note = await window.toolHubAppApi.files.read("runtime/note.txt");
+console.log(note.content);
+
+const hosts = await window.toolHubAppApi.systemFiles.read("C:\\Windows\\System32\\drivers\\etc\\hosts");
+console.log(hosts.size);
+
+await window.toolHubAppApi.storage.set("ui.theme", { mode: "dark" });
+const item = await window.toolHubAppApi.storage.get("ui.theme");
+console.log(item.value?.mode);
+```
 
 ## 10. 推荐工程结构（进阶）
 

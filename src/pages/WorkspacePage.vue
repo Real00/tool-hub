@@ -5,73 +5,18 @@ const {
     activeTabLabel,
     appLogs,
     appsInActiveTab,
-    bridgeMessage,
-    bridgeStatus,
     loadAppLogs,
     logsAppName,
     logsStatus,
     openNodeAppWindow,
     removeNodeApp,
-    runtimeLabel,
-    showOverview,
-    startNodeApp,
     stopNodeApp,
-    testElectronBridge,
-    toggleOverview,
 } = useToolHubState();
 </script>
 
 <template>
     <section
-        class="rounded-2xl border border-slate-800/70 bg-slate-900/60 p-4 backdrop-blur-sm"
-    >
-        <div class="flex flex-wrap items-center gap-2">
-            <span
-                class="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-200"
-            >
-                Runtime: {{ runtimeLabel }}
-            </span>
-            <span
-                class="rounded-md px-2 py-1 text-xs"
-                :class="
-                    bridgeStatus === 'success'
-                        ? 'bg-emerald-500/20 text-emerald-200'
-                        : bridgeStatus === 'error'
-                          ? 'bg-rose-500/20 text-rose-200'
-                          : bridgeStatus === 'loading'
-                            ? 'bg-amber-500/20 text-amber-200'
-                            : 'bg-slate-800 text-slate-300'
-                "
-            >
-                {{ bridgeStatus }}
-            </span>
-            <button
-                type="button"
-                class="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
-                @click="testElectronBridge"
-            >
-                Test Bridge
-            </button>
-            <button
-                type="button"
-                class="rounded-md border border-slate-600 px-2.5 py-1 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
-                @click="toggleOverview"
-            >
-                {{ showOverview ? "Hide Overview" : "Show Overview" }}
-            </button>
-        </div>
-        <p class="mt-2 text-xs text-slate-400">{{ bridgeMessage }}</p>
-        <div
-            v-if="showOverview"
-            class="mt-3 rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-3 text-sm text-slate-300"
-        >
-            Top tabs are category definitions. App-to-tab binding is persisted
-            in local SQLite, and opening an app launches its UI in a new window.
-        </div>
-    </section>
-
-    <section
-        class="mt-6 rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 p-6"
+        class="rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 p-6"
     >
         <p class="text-xs uppercase tracking-[0.2em] text-cyan-300/90">
             Active Category
@@ -123,18 +68,10 @@ const {
                     class="rounded-md border border-slate-600 px-2.5 py-1.5 text-xs transition hover:border-cyan-400 hover:text-cyan-200"
                     @click="openNodeAppWindow(appItem.id)"
                 >
-                    Open Window
+                    Open
                 </button>
                 <button
-                    v-if="!appItem.running"
-                    type="button"
-                    class="rounded-md bg-emerald-500 px-2.5 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-emerald-400"
-                    @click="startNodeApp(appItem.id)"
-                >
-                    Start
-                </button>
-                <button
-                    v-else
+                    v-if="appItem.running"
                     type="button"
                     class="rounded-md bg-rose-500 px-2.5 py-1.5 text-xs font-semibold text-slate-900 transition hover:bg-rose-400"
                     @click="stopNodeApp(appItem.id)"

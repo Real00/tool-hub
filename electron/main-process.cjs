@@ -148,6 +148,7 @@ function createMainWindow() {
     },
   });
   mainWindow = win;
+  win.maximize();
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -212,6 +213,7 @@ function createMainWindow() {
   const showTimeoutMs = isDev ? 30000 : 10000;
   const showTimer = setTimeout(() => {
     if (!win.isDestroyed() && !win.isVisible()) {
+      win.maximize();
       win.show();
     }
   }, showTimeoutMs);
@@ -220,6 +222,7 @@ function createMainWindow() {
     clearTimeout(showTimer);
     bootTrace("main window ready-to-show");
     if (!win.isDestroyed()) {
+      win.maximize();
       win.show();
     }
   });
@@ -232,6 +235,7 @@ function createMainWindow() {
     clearTimeout(showTimer);
     bootTrace("main window load failed");
     if (!win.isDestroyed()) {
+      win.maximize();
       win.show();
     }
     console.error("Failed to load main window content:", error);
@@ -267,15 +271,28 @@ async function openAppWindowById(appId) {
     backgroundColor: "#020617",
     title: `${appInfo.name} - Tool Hub`,
     webPreferences: {
+      preload: path.join(__dirname, "app-preload-bridge.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
     },
   });
 
   appWindows.set(appId, win);
   win.on("closed", () => {
     appWindows.delete(appId);
+  });
+  win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.warn(`[app-window:${appId}] console(${level}) ${sourceId}:${line} ${message}`);
+    }
+  });
+  win.webContents.on("did-fail-load", (_event, code, description, validatedUrl) => {
+    console.error(`[app-window:${appId}] did-fail-load code=${code} url=${validatedUrl} ${description}`);
+  });
+  win.webContents.on("render-process-gone", (_event, details) => {
+    console.error(
+      `[app-window:${appId}] render-process-gone reason=${details?.reason ?? "unknown"} exitCode=${details?.exitCode ?? "unknown"}`,
+    );
   });
   void win.loadURL(appInfo.uiUrl);
   return true;
@@ -289,6 +306,30 @@ function closeAppWindowById(appId) {
   }
   win.close();
   appWindows.delete(appId);
+}
+
+function getRuntimeAppIdByWebContents(webContents) {
+  if (!webContents || webContents.isDestroyed()) {
+    return null;
+  }
+  const webContentsId = webContents.id;
+  for (const [appId, win] of appWindows.entries()) {
+    if (!win || win.isDestroyed()) {
+      continue;
+    }
+    if (win.webContents.id === webContentsId) {
+      return appId;
+    }
+  }
+  return null;
+}
+
+function requireRuntimeAppId(event) {
+  const appId = getRuntimeAppIdByWebContents(event.sender);
+  if (!appId) {
+    throw new Error("Unauthorized app runtime request.");
+  }
+  return appId;
 }
 
 function makeTerminalSubscriptionKey(webContentsId, projectId) {
@@ -465,6 +506,56 @@ ipcMain.handle("apps:remove", async (_event, appId) => {
 
 ipcMain.handle("apps:open-window", async (_event, appId) => {
   return openAppWindowById(appId);
+});
+
+ipcMain.handle("app-runtime:get-info", async (event) => {
+  const appId = requireRuntimeAppId(event);
+  return { appId };
+});
+
+ipcMain.handle("app-runtime:kv-get", async (event, key) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().getAppStorageValue(appId, key);
+});
+
+ipcMain.handle("app-runtime:kv-set", async (event, key, value) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().setAppStorageValue(appId, key, value);
+});
+
+ipcMain.handle("app-runtime:kv-delete", async (event, key) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().deleteAppStorageKey(appId, key);
+});
+
+ipcMain.handle("app-runtime:kv-list", async (event, prefix) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().listAppStorage(appId, prefix);
+});
+
+ipcMain.handle("app-runtime:kv-clear", async (event) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().clearAppStorage(appId);
+});
+
+ipcMain.handle("app-runtime:file-read", async (event, filePath, options) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().readAppFile(appId, filePath, options);
+});
+
+ipcMain.handle("app-runtime:file-write", async (event, filePath, content, options) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().writeAppFile(appId, filePath, content, options);
+});
+
+ipcMain.handle("app-runtime:system-file-read", async (event, filePath, options) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().readSystemFile(appId, filePath, options);
+});
+
+ipcMain.handle("app-runtime:system-file-write", async (event, filePath, content, options) => {
+  const appId = requireRuntimeAppId(event);
+  return getAppsManager().writeSystemFile(appId, filePath, content, options);
 });
 
 ipcMain.handle("apps:pick-install-directory", async () => {

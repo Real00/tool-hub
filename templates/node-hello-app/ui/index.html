@@ -81,6 +81,32 @@
         border-color: var(--accent);
         color: #a5f3fc;
       }
+      input {
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.78);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 7px 10px;
+        outline: none;
+        min-width: 130px;
+      }
+      input:focus {
+        border-color: var(--accent);
+      }
+      textarea {
+        width: 100%;
+        min-height: 96px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(15, 23, 42, 0.78);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 8px 10px;
+        outline: none;
+        resize: vertical;
+      }
+      textarea:focus {
+        border-color: var(--accent);
+      }
       .accent {
         background: rgba(34, 211, 238, 0.22);
         border-color: rgba(34, 211, 238, 0.5);
@@ -137,6 +163,61 @@
               <button id="pulse-btn">Pulse Card</button>
             </div>
           </div>
+
+          <div class="panel">
+            <p><strong>Host KV Storage</strong></p>
+            <p class="subtle mono" id="kv-runtime-info">runtime: loading...</p>
+            <div class="row">
+              <input id="kv-key" placeholder="key" value="demo.counter" />
+              <input id="kv-value" placeholder='value JSON (e.g. {"n":1})' value='{"count":0}' />
+            </div>
+            <div class="row">
+              <button id="kv-load-btn">Load</button>
+              <button id="kv-save-btn" class="accent">Save</button>
+              <button id="kv-delete-btn">Delete</button>
+              <button id="kv-list-btn">List</button>
+              <button id="kv-clear-btn">Clear</button>
+            </div>
+            <p id="kv-output" class="subtle mono"></p>
+          </div>
+
+          <div class="panel">
+            <p><strong>Host File API</strong></p>
+            <p class="subtle mono">path: <code>runtime/note.txt</code></p>
+            <div class="row">
+              <button id="file-write-btn">Write Note</button>
+              <button id="file-read-btn">Read Note</button>
+            </div>
+            <p id="file-output" class="subtle mono"></p>
+          </div>
+
+          <div class="panel" style="grid-column: 1 / -1">
+            <p><strong>Arbitrary Path File (Host System API)</strong></p>
+            <p class="subtle">
+              This example calls <code>window.toolHubAppApi.systemFiles</code> in the host preload.
+              Protected files (for example hosts) may require admin rights.
+            </p>
+            <div class="row">
+              <input
+                id="any-path-input"
+                class="mono"
+                style="min-width: 420px; flex: 1"
+                value="C:\\Windows\\System32\\drivers\\etc\\hosts"
+                placeholder="Absolute file path"
+              />
+            </div>
+            <textarea
+              id="any-path-content"
+              class="mono"
+              placeholder="File content for write operations..."
+            ></textarea>
+            <div class="row" style="margin-top: 8px">
+              <button id="any-path-read-btn">Read</button>
+              <button id="any-path-write-btn" class="accent">Write (Replace)</button>
+              <button id="any-path-append-btn">Write (Append)</button>
+            </div>
+            <p id="any-path-output" class="subtle mono"></p>
+          </div>
         </div>
 
         <div id="toast" class="toast mono"></div>
@@ -144,10 +225,31 @@
     </main>
 
     <script>
+      window.addEventListener("error", (event) => {
+        const toastEl = document.getElementById("toast");
+        if (toastEl) {
+          toastEl.textContent = `UI script error: ${event.message}`;
+        }
+      });
+
       const counterValue = document.getElementById("counter-value");
       const themeValue = document.getElementById("theme-value");
       const toast = document.getElementById("toast");
       const card = document.querySelector(".card");
+      const kvRuntimeInfo = document.getElementById("kv-runtime-info");
+      const kvOutput = document.getElementById("kv-output");
+      const kvKeyInput = document.getElementById("kv-key");
+      const kvValueInput = document.getElementById("kv-value");
+      const fileOutput = document.getElementById("file-output");
+      const anyPathInput = document.getElementById("any-path-input");
+      const anyPathContent = document.getElementById("any-path-content");
+      const anyPathOutput = document.getElementById("any-path-output");
+      let hostAppApi = null;
+      try {
+        hostAppApi = window.toolHubAppApi ?? null;
+      } catch (error) {
+        console.error("Read toolHubAppApi failed:", error);
+      }
 
       let count = 0;
       let darkMode = true;
@@ -202,6 +304,151 @@
           ],
           { duration: 320, easing: "ease-out" },
         );
+      });
+
+      async function runKvAction(action) {
+        if (!hostAppApi?.storage) {
+          kvRuntimeInfo.textContent = "runtime: toolHubAppApi is unavailable";
+          showToast("Host storage API is unavailable.");
+          return;
+        }
+
+        try {
+          const result = await action();
+          kvOutput.textContent = JSON.stringify(result, null, 2);
+          showToast("Host storage call succeeded.");
+        } catch (error) {
+          kvOutput.textContent = String(error?.message || error);
+          showToast("Host storage call failed.");
+        }
+      }
+
+      if (hostAppApi?.getRuntimeInfo) {
+        hostAppApi
+          .getRuntimeInfo()
+          .then((info) => {
+            kvRuntimeInfo.textContent = `runtime appId: ${info?.appId || "-"}`;
+          })
+          .catch(() => {
+            kvRuntimeInfo.textContent = "runtime appId: unavailable";
+          });
+      } else {
+        kvRuntimeInfo.textContent = "runtime: toolHubAppApi is unavailable";
+      }
+
+      document.getElementById("kv-load-btn").addEventListener("click", () => {
+        runKvAction(() => hostAppApi.storage.get(kvKeyInput.value));
+      });
+
+      document.getElementById("kv-save-btn").addEventListener("click", () => {
+        let value;
+        try {
+          value = JSON.parse(kvValueInput.value);
+        } catch {
+          value = kvValueInput.value;
+        }
+        runKvAction(() => hostAppApi.storage.set(kvKeyInput.value, value));
+      });
+
+      document.getElementById("kv-delete-btn").addEventListener("click", () => {
+        runKvAction(() => hostAppApi.storage.delete(kvKeyInput.value));
+      });
+
+      document.getElementById("kv-list-btn").addEventListener("click", () => {
+        runKvAction(() => hostAppApi.storage.list(""));
+      });
+
+      document.getElementById("kv-clear-btn").addEventListener("click", () => {
+        runKvAction(() => hostAppApi.storage.clear());
+      });
+
+      document.getElementById("file-write-btn").addEventListener("click", async () => {
+        if (!hostAppApi?.files) {
+          fileOutput.textContent = "file api unavailable";
+          showToast("Host file API is unavailable.");
+          return;
+        }
+        try {
+          const text = `updated at ${new Date().toISOString()}\n`;
+          const result = await hostAppApi.files.write("runtime/note.txt", text, {
+            append: false,
+            createDirs: true,
+          });
+          fileOutput.textContent = JSON.stringify(result, null, 2);
+          showToast("File write succeeded.");
+        } catch (error) {
+          fileOutput.textContent = String(error?.message || error);
+          showToast("File write failed.");
+        }
+      });
+
+      document.getElementById("file-read-btn").addEventListener("click", async () => {
+        if (!hostAppApi?.files) {
+          fileOutput.textContent = "file api unavailable";
+          showToast("Host file API is unavailable.");
+          return;
+        }
+        try {
+          const result = await hostAppApi.files.read("runtime/note.txt");
+          fileOutput.textContent = JSON.stringify(result, null, 2);
+          showToast("File read succeeded.");
+        } catch (error) {
+          fileOutput.textContent = String(error?.message || error);
+          showToast("File read failed.");
+        }
+      });
+
+      function getSystemFilesApi() {
+        if (!hostAppApi?.systemFiles) {
+          throw new Error("Host systemFiles API is unavailable.");
+        }
+        return hostAppApi.systemFiles;
+      }
+
+      document.getElementById("any-path-read-btn").addEventListener("click", async () => {
+        try {
+          const data = await getSystemFilesApi().read(anyPathInput.value);
+          anyPathContent.value = data.content || "";
+          anyPathOutput.textContent = JSON.stringify(
+            { path: data.path, size: data.size, truncated: data.truncated },
+            null,
+            2,
+          );
+          showToast("Arbitrary path read succeeded.");
+        } catch (error) {
+          anyPathOutput.textContent = String(error?.message || error);
+          showToast("Arbitrary path read failed.");
+        }
+      });
+
+      document.getElementById("any-path-write-btn").addEventListener("click", async () => {
+        try {
+          const data = await getSystemFilesApi().write(
+            anyPathInput.value,
+            anyPathContent.value,
+            { append: false },
+          );
+          anyPathOutput.textContent = JSON.stringify(data, null, 2);
+          showToast("Arbitrary path write succeeded.");
+        } catch (error) {
+          anyPathOutput.textContent = String(error?.message || error);
+          showToast("Arbitrary path write failed.");
+        }
+      });
+
+      document.getElementById("any-path-append-btn").addEventListener("click", async () => {
+        try {
+          const data = await getSystemFilesApi().write(
+            anyPathInput.value,
+            anyPathContent.value,
+            { append: true },
+          );
+          anyPathOutput.textContent = JSON.stringify(data, null, 2);
+          showToast("Arbitrary path append succeeded.");
+        } catch (error) {
+          anyPathOutput.textContent = String(error?.message || error);
+          showToast("Arbitrary path append failed.");
+        }
       });
     </script>
   </body>

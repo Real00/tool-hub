@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import AppsManagementPanel from "../components/settings/AppsManagementPanel.vue";
-import GeneratorPanel from "../components/settings/GeneratorPanel.vue";
+import RuntimePanel from "../components/settings/RuntimePanel.vue";
 import TabDefinitionsPanel from "../components/settings/TabDefinitionsPanel.vue";
 </script>
 
 <template>
   <div class="space-y-6">
+    <RuntimePanel />
     <TabDefinitionsPanel />
     <AppsManagementPanel />
-    <GeneratorPanel />
   </div>
 </template>

@@ -14,7 +14,6 @@ const {
     loadAppsData,
     openNodeAppWindow,
     removeNodeApp,
-    startNodeApp,
     stopNodeApp,
     tabs,
 } = useToolHubState();
@@ -160,15 +159,7 @@ const {
                                     Open
                                 </button>
                                 <button
-                                    v-if="!appItem.running"
-                                    type="button"
-                                    class="rounded-md border border-slate-600 px-2 py-1 text-xs transition hover:border-cyan-400 hover:text-cyan-200"
-                                    @click="startNodeApp(appItem.id)"
-                                >
-                                    Start
-                                </button>
-                                <button
-                                    v-else
+                                    v-if="appItem.running"
                                     type="button"
                                     class="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-200 transition hover:border-rose-400 hover:text-rose-100"
                                     @click="stopNodeApp(appItem.id)"

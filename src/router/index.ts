@@ -1,4 +1,5 @@
 import { createRouter, createWebHashHistory } from "vue-router";
+import GeneratorPage from "../pages/GeneratorPage.vue";
 import SettingsPage from "../pages/SettingsPage.vue";
 import WorkspacePage from "../pages/WorkspacePage.vue";
 
@@ -18,6 +19,11 @@ const router = createRouter({
       path: "/settings",
       name: "settings",
       component: SettingsPage,
+    },
+    {
+      path: "/generator",
+      name: "generator",
+      component: GeneratorPage,
     },
     {
       path: "/:pathMatch(.*)*",
