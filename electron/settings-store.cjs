@@ -45,12 +45,44 @@ async function initDb() {
     );
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS app_generator_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+
   const row = await db.get("SELECT COUNT(1) AS count FROM settings_tabs");
   if (!row || row.count === 0) {
     await writeTabs(db, DEFAULT_TABS);
   }
 
   return db;
+}
+
+async function getGeneratorSettingValue(db, key, fallback = "") {
+  const row = await db.get(
+    "SELECT value FROM app_generator_settings WHERE key = ?",
+    key,
+  );
+  if (!row) {
+    return fallback;
+  }
+  return String(row.value ?? fallback);
+}
+
+async function setGeneratorSettingValue(db, key, value) {
+  await db.run(
+    `INSERT INTO app_generator_settings(key, value, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       value = excluded.value,
+       updated_at = excluded.updated_at`,
+    key,
+    value,
+    Date.now(),
+  );
 }
 
 function normalizeTabId(value, fallback) {
@@ -132,9 +164,24 @@ async function initializeSettingsStore() {
   return getSettingsTabs();
 }
 
+async function getGeneratorSettings() {
+  const db = await getDb();
+  const claudeCliPath = await getGeneratorSettingValue(db, "claude_cli_path", "");
+  return { claudeCliPath };
+}
+
+async function saveGeneratorSettings(input) {
+  const claudeCliPath = String(input?.claudeCliPath ?? "").trim();
+  const db = await getDb();
+  await setGeneratorSettingValue(db, "claude_cli_path", claudeCliPath);
+  return { claudeCliPath };
+}
+
 module.exports = {
+  getGeneratorSettings,
   getSettingsTabs,
   initializeSettingsStore,
   saveSettingsTabs,
+  saveGeneratorSettings,
   resolveDatabasePath,
 };

@@ -1,5 +1,6 @@
 import { createApp } from "vue";
 import App from "./app/App.vue";
+import router from "./router";
 import "./styles/global.css";
 
 function showBootError(error: unknown) {
@@ -13,7 +14,9 @@ function showBootError(error: unknown) {
 }
 
 try {
-  createApp(App).mount("#app");
+  const app = createApp(App);
+  app.use(router);
+  app.mount("#app");
 } catch (error) {
   showBootError(error);
   throw error;

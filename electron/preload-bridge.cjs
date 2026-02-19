@@ -13,6 +13,64 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   initializeSettingsDatabase() {
     return ipcRenderer.invoke("settings:initialize-db");
   },
+  getGeneratorSettings() {
+    return ipcRenderer.invoke("generator:get-settings");
+  },
+  saveGeneratorSettings(input) {
+    return ipcRenderer.invoke("generator:save-settings", input);
+  },
+  detectClaudeCli() {
+    return ipcRenderer.invoke("generator:detect-claude-cli");
+  },
+  createGeneratorProject(projectName) {
+    return ipcRenderer.invoke("generator:create-project", projectName);
+  },
+  getGeneratorProject(projectId) {
+    return ipcRenderer.invoke("generator:get-project", projectId);
+  },
+  listGeneratorProjects() {
+    return ipcRenderer.invoke("generator:list-projects");
+  },
+  readGeneratorProjectFile(projectId, filePath) {
+    return ipcRenderer.invoke("generator:read-project-file", projectId, filePath);
+  },
+  generatorChatInProject(projectId, message, cliPathOverride) {
+    return ipcRenderer.invoke("generator:chat-project", projectId, message, cliPathOverride);
+  },
+  installGeneratorProjectApp(projectId, tabId) {
+    return ipcRenderer.invoke("generator:install-project", projectId, tabId);
+  },
+  getGeneratorProjectTerminal(projectId) {
+    return ipcRenderer.invoke("generator:get-terminal", projectId);
+  },
+  startGeneratorProjectTerminal(projectId) {
+    return ipcRenderer.invoke("generator:start-terminal", projectId);
+  },
+  sendGeneratorProjectTerminalInput(projectId, text, appendNewline) {
+    return ipcRenderer.invoke("generator:terminal-input", projectId, text, appendNewline);
+  },
+  stopGeneratorProjectTerminal(projectId) {
+    return ipcRenderer.invoke("generator:stop-terminal", projectId);
+  },
+  resizeGeneratorProjectTerminal(projectId, cols, rows) {
+    return ipcRenderer.invoke("generator:resize-terminal", projectId, cols, rows);
+  },
+  subscribeGeneratorProjectTerminal(projectId, callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const listener = (_event, payload) => {
+      if (payload?.projectId === projectId) {
+        callback(payload);
+      }
+    };
+    ipcRenderer.on("generator:terminal-output", listener);
+    ipcRenderer.send("generator:terminal-subscribe", projectId);
+    return () => {
+      ipcRenderer.send("generator:terminal-unsubscribe", projectId);
+      ipcRenderer.removeListener("generator:terminal-output", listener);
+    };
+  },
   getAppsRoot() {
     return ipcRenderer.invoke("apps:get-root");
   },

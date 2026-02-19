@@ -1,11 +1,57 @@
 import type { TabDefinition } from "../types/settings";
 import type { AppsRootInfo, InstalledApp } from "../types/app";
+import type {
+  ClaudeCliDetectionResult,
+  GeneratorChatResult,
+  GeneratorInstallResult,
+  GeneratorProjectDetail,
+  GeneratorProjectFileContent,
+  GeneratorProjectSummary,
+  GeneratorSettings,
+  GeneratorTerminalState,
+} from "../types/generator";
 
 interface ToolHubApi {
   ping: (name: string) => Promise<string>;
   getSettingsTabs: () => Promise<TabDefinition[]>;
   saveSettingsTabs: (tabs: TabDefinition[]) => Promise<TabDefinition[]>;
   initializeSettingsDatabase: () => Promise<TabDefinition[]>;
+  getGeneratorSettings: () => Promise<GeneratorSettings>;
+  saveGeneratorSettings: (input: GeneratorSettings) => Promise<GeneratorSettings>;
+  detectClaudeCli: () => Promise<ClaudeCliDetectionResult>;
+  createGeneratorProject: (projectName?: string) => Promise<GeneratorProjectDetail>;
+  getGeneratorProject: (projectId: string) => Promise<GeneratorProjectDetail>;
+  listGeneratorProjects: () => Promise<GeneratorProjectSummary[]>;
+  readGeneratorProjectFile: (
+    projectId: string,
+    filePath: string,
+  ) => Promise<GeneratorProjectFileContent>;
+  generatorChatInProject: (
+    projectId: string,
+    message: string,
+    cliPathOverride?: string,
+  ) => Promise<GeneratorChatResult>;
+  installGeneratorProjectApp: (
+    projectId: string,
+    tabId: string,
+  ) => Promise<GeneratorInstallResult>;
+  getGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
+  startGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
+  sendGeneratorProjectTerminalInput: (
+    projectId: string,
+    text: string,
+    appendNewline?: boolean,
+  ) => Promise<GeneratorTerminalState>;
+  stopGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
+  resizeGeneratorProjectTerminal: (
+    projectId: string,
+    cols: number,
+    rows: number,
+  ) => Promise<GeneratorTerminalState>;
+  subscribeGeneratorProjectTerminal: (
+    projectId: string,
+    callback: (state: GeneratorTerminalState) => void,
+  ) => () => void;
   getAppsRoot: () => Promise<AppsRootInfo>;
   listApps: () => Promise<InstalledApp[]>;
   initializeAppsDatabase: () => Promise<InstalledApp[]>;
@@ -44,6 +90,87 @@ export function saveSettingsTabs(tabs: TabDefinition[]): Promise<TabDefinition[]
 
 export function initializeSettingsDatabase(): Promise<TabDefinition[]> {
   return getApi().initializeSettingsDatabase();
+}
+
+export function getGeneratorSettings(): Promise<GeneratorSettings> {
+  return getApi().getGeneratorSettings();
+}
+
+export function saveGeneratorSettings(input: GeneratorSettings): Promise<GeneratorSettings> {
+  return getApi().saveGeneratorSettings(input);
+}
+
+export function detectClaudeCli(): Promise<ClaudeCliDetectionResult> {
+  return getApi().detectClaudeCli();
+}
+
+export function createGeneratorProject(projectName?: string): Promise<GeneratorProjectDetail> {
+  return getApi().createGeneratorProject(projectName);
+}
+
+export function getGeneratorProject(projectId: string): Promise<GeneratorProjectDetail> {
+  return getApi().getGeneratorProject(projectId);
+}
+
+export function listGeneratorProjects(): Promise<GeneratorProjectSummary[]> {
+  return getApi().listGeneratorProjects();
+}
+
+export function readGeneratorProjectFile(
+  projectId: string,
+  filePath: string,
+): Promise<GeneratorProjectFileContent> {
+  return getApi().readGeneratorProjectFile(projectId, filePath);
+}
+
+export function generatorChatInProject(
+  projectId: string,
+  message: string,
+  cliPathOverride?: string,
+): Promise<GeneratorChatResult> {
+  return getApi().generatorChatInProject(projectId, message, cliPathOverride);
+}
+
+export function installGeneratorProjectApp(
+  projectId: string,
+  tabId: string,
+): Promise<GeneratorInstallResult> {
+  return getApi().installGeneratorProjectApp(projectId, tabId);
+}
+
+export function getGeneratorProjectTerminal(projectId: string): Promise<GeneratorTerminalState> {
+  return getApi().getGeneratorProjectTerminal(projectId);
+}
+
+export function startGeneratorProjectTerminal(projectId: string): Promise<GeneratorTerminalState> {
+  return getApi().startGeneratorProjectTerminal(projectId);
+}
+
+export function sendGeneratorProjectTerminalInput(
+  projectId: string,
+  text: string,
+  appendNewline = true,
+): Promise<GeneratorTerminalState> {
+  return getApi().sendGeneratorProjectTerminalInput(projectId, text, appendNewline);
+}
+
+export function stopGeneratorProjectTerminal(projectId: string): Promise<GeneratorTerminalState> {
+  return getApi().stopGeneratorProjectTerminal(projectId);
+}
+
+export function resizeGeneratorProjectTerminal(
+  projectId: string,
+  cols: number,
+  rows: number,
+): Promise<GeneratorTerminalState> {
+  return getApi().resizeGeneratorProjectTerminal(projectId, cols, rows);
+}
+
+export function subscribeGeneratorProjectTerminal(
+  projectId: string,
+  callback: (state: GeneratorTerminalState) => void,
+): () => void {
+  return getApi().subscribeGeneratorProjectTerminal(projectId, callback);
 }
 
 export function getAppsRoot(): Promise<AppsRootInfo> {

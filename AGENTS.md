@@ -25,6 +25,10 @@ Use `pnpm` for all workflows.
 - `pnpm electron:start`: launch Electron directly (fast start, no forced build).
 - `pnpm electron:start:build`: build first, then launch Electron.
 
+## Agent Operation Rule
+- Do not run dependency installation commands automatically (for example `pnpm install`, `npm install`, `yarn install`, `pnpm add`).
+- Dependency changes should be updated in code/config only, and the user will run installation manually.
+
 ## Coding Style & Naming Conventions
 - Language: TypeScript + Vue SFC (`<script setup lang="ts">`).
 - Indentation: 2 spaces; keep semicolons and double quotes consistent with existing files.

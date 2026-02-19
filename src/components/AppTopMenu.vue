@@ -4,6 +4,7 @@ import type { TabDefinition } from "../types/settings";
 defineProps<{
   tabs: TabDefinition[];
   activeTab: string;
+  isSettingsActive: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -35,7 +36,12 @@ const emit = defineEmits<{
         <div class="ml-auto flex items-center gap-2">
           <button
             type="button"
-            class="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white"
+            class="rounded-lg border px-3 py-1.5 text-sm transition"
+            :class="
+              isSettingsActive
+                ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-200'
+                : 'border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white'
+            "
             @click="emit('settings')"
           >
             Settings
