@@ -1,0 +1,11 @@
+{
+  "id": "hello-app",
+  "name": "Hello App",
+  "version": "0.1.0",
+  "entry": "src/index.js",
+  "uiPath": "ui/index.html",
+  "env": {
+    "APP_GREETING": "Hello from user app",
+    "TICK_INTERVAL_MS": "3000"
+  }
+}

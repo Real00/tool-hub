@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hello App</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg-a: #0e7490;
+        --bg-b: #020617;
+        --card: rgba(15, 23, 42, 0.76);
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #22d3ee;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: radial-gradient(circle at 20% 20%, var(--bg-a) 0%, var(--bg-b) 55%);
+        background-repeat: no-repeat;
+        background-size: cover;
+        background-position: center;
+        background-attachment: fixed;
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 760px;
+        margin: 36px auto;
+        padding: 0 20px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 16px;
+        padding: 20px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+      p {
+        margin: 8px 0;
+        line-height: 1.5;
+      }
+      .subtle {
+        color: var(--muted);
+      }
+      code {
+        background: rgba(30, 41, 59, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+      .grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        margin-top: 14px;
+      }
+      .panel {
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 12px;
+        padding: 12px;
+        background: rgba(2, 6, 23, 0.5);
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      button {
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        background: rgba(15, 23, 42, 0.9);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 7px 10px;
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--accent);
+        color: #a5f3fc;
+      }
+      .accent {
+        background: rgba(34, 211, 238, 0.22);
+        border-color: rgba(34, 211, 238, 0.5);
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .toast {
+        margin-top: 12px;
+        min-height: 24px;
+        color: #67e8f9;
+      }
+      .light {
+        --bg-a: #bae6fd;
+        --bg-b: #eff6ff;
+        --card: rgba(255, 255, 255, 0.85);
+        --text: #0f172a;
+        --muted: #475569;
+        --accent: #0284c7;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="card">
+        <h1>Hello App UI</h1>
+        <p class="subtle">This page is loaded via <code>uiPath</code> in <code>app.json</code>.</p>
+        <p class="subtle">Click buttons below to test local UI interactions quickly.</p>
+
+        <div class="grid">
+          <div class="panel">
+            <p><strong>Counter</strong></p>
+            <p class="mono">value: <span id="counter-value">0</span></p>
+            <div class="row">
+              <button id="counter-add">+1</button>
+              <button id="counter-sub">-1</button>
+              <button id="counter-reset">Reset</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <p><strong>Theme</strong></p>
+            <p class="mono">mode: <span id="theme-value">dark</span></p>
+            <div class="row">
+              <button id="theme-toggle" class="accent">Toggle Theme</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <p><strong>Actions</strong></p>
+            <div class="row">
+              <button id="toast-btn">Show Message</button>
+              <button id="time-btn">Current Time</button>
+              <button id="pulse-btn">Pulse Card</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="toast" class="toast mono"></div>
+      </section>
+    </main>
+
+    <script>
+      const counterValue = document.getElementById("counter-value");
+      const themeValue = document.getElementById("theme-value");
+      const toast = document.getElementById("toast");
+      const card = document.querySelector(".card");
+
+      let count = 0;
+      let darkMode = true;
+
+      function renderCounter() {
+        counterValue.textContent = String(count);
+      }
+
+      function showToast(text) {
+        toast.textContent = text;
+        clearTimeout(showToast._timer);
+        showToast._timer = setTimeout(() => {
+          toast.textContent = "";
+        }, 1600);
+      }
+
+      document.getElementById("counter-add").addEventListener("click", () => {
+        count += 1;
+        renderCounter();
+      });
+
+      document.getElementById("counter-sub").addEventListener("click", () => {
+        count -= 1;
+        renderCounter();
+      });
+
+      document.getElementById("counter-reset").addEventListener("click", () => {
+        count = 0;
+        renderCounter();
+      });
+
+      document.getElementById("theme-toggle").addEventListener("click", () => {
+        darkMode = !darkMode;
+        document.body.classList.toggle("light", !darkMode);
+        themeValue.textContent = darkMode ? "dark" : "light";
+      });
+
+      document.getElementById("toast-btn").addEventListener("click", () => {
+        showToast("Interaction success: UI event handled.");
+      });
+
+      document.getElementById("time-btn").addEventListener("click", () => {
+        showToast(`Now: ${new Date().toLocaleTimeString()}`);
+      });
+
+      document.getElementById("pulse-btn").addEventListener("click", () => {
+        card.animate(
+          [
+            { transform: "scale(1)" },
+            { transform: "scale(1.015)" },
+            { transform: "scale(1)" },
+          ],
+          { duration: 320, easing: "ease-out" },
+        );
+      });
+    </script>
+  </body>
+</html>

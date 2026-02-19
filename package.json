@@ -1,0 +1,39 @@
+{
+  "name": "electron-tool-hub-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "electron/main-process.cjs",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "build": "pnpm typecheck && vite build",
+    "preview": "vite preview",
+    "electron:dev": "concurrently -k -s first \"vite\" \"wait-on tcp:5173 && electron . http://127.0.0.1:5173\"",
+    "electron:start": "electron .",
+    "electron:start:build": "pnpm build && electron ."
+  },
+  "dependencies": {
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.2",
+    "electron": "^33.2.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^6.1.0",
+    "wait-on": "^8.0.1",
+    "vue-tsc": "^2.1.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "sqlite3"
+    ]
+  }
+}
