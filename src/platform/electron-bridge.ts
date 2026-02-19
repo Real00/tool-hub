@@ -1,5 +1,6 @@
 import type { TabDefinition } from "../types/settings";
 import type { AppsRootInfo, InstalledApp } from "../types/app";
+import type { SystemAppEntry } from "../types/system-app";
 import type {
   ClaudeCliDetectionResult,
   GeneratorChatResult,
@@ -62,6 +63,10 @@ interface ToolHubApi {
   removeApp: (appId: string) => Promise<InstalledApp[]>;
   openAppWindow: (appId: string) => Promise<boolean>;
   pickInstallDirectory: () => Promise<string | null>;
+  refreshSystemAppsIndex: () => Promise<number>;
+  searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
+  openSystemApp: (appId: string) => Promise<boolean>;
+  subscribeQuickLauncherRequest: (callback: () => void) => () => void;
 }
 
 function getApi(): ToolHubApi {
@@ -211,4 +216,20 @@ export function openAppWindow(appId: string): Promise<boolean> {
 
 export function pickInstallDirectory(): Promise<string | null> {
   return getApi().pickInstallDirectory();
+}
+
+export function refreshSystemAppsIndex(): Promise<number> {
+  return getApi().refreshSystemAppsIndex();
+}
+
+export function searchSystemApps(query: string, limit = 12): Promise<SystemAppEntry[]> {
+  return getApi().searchSystemApps(query, limit);
+}
+
+export function openSystemApp(appId: string): Promise<boolean> {
+  return getApi().openSystemApp(appId);
+}
+
+export function subscribeQuickLauncherRequest(callback: () => void): () => void {
+  return getApi().subscribeQuickLauncherRequest(callback);
 }

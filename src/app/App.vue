@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 import AppTopMenu from "../components/AppTopMenu.vue";
+import QuickLauncherModal from "../components/QuickLauncherModal.vue";
 import { useToolHubState } from "../composables/use-tool-hub-state";
+import { isElectronRuntime, subscribeQuickLauncherRequest } from "../platform/electron-bridge";
 
 const route = useRoute();
 const router = useRouter();
-const { activeTab, dispose, enterSettingsMode, init, tabs } = useToolHubState();
+const { activeTab, apps, dispose, enterSettingsMode, init, tabs } = useToolHubState();
+const quickLauncherOpen = ref(false);
+let unsubscribeQuickLauncherRequest: (() => void) | null = null;
 
 const isSettingsRoute = computed(() => route.name === "settings");
 const isGeneratorRoute = computed(() => route.name === "generator");
@@ -45,11 +49,22 @@ watch(
     { immediate: true },
 );
 
+function handleQuickLauncherClose() {
+    quickLauncherOpen.value = false;
+}
+
 onMounted(() => {
     init();
+    if (isElectronRuntime()) {
+        unsubscribeQuickLauncherRequest = subscribeQuickLauncherRequest(() => {
+            quickLauncherOpen.value = true;
+        });
+    }
 });
 
 onUnmounted(() => {
+    unsubscribeQuickLauncherRequest?.();
+    unsubscribeQuickLauncherRequest = null;
     dispose();
 });
 </script>
@@ -65,9 +80,16 @@ onUnmounted(() => {
             :active-tab="activeTab"
             :is-settings-active="isSettingsRoute"
             :is-generator-active="isGeneratorRoute"
+            :installed-apps="apps"
             @select="handleTabSelect"
             @generator="handleGeneratorToggle"
             @settings="handleSettingsToggle"
+        />
+
+        <QuickLauncherModal
+            :open="quickLauncherOpen"
+            :installed-apps="apps"
+            @close="handleQuickLauncherClose"
         />
 
         <main class="relative mx-auto w-full px-4 pb-10 pt-7 md:px-6">

@@ -12,6 +12,7 @@ import type {
   GeneratorTerminalState,
 } from "./types/generator";
 import type { TabDefinition } from "./types/settings";
+import type { SystemAppEntry } from "./types/system-app";
 
 declare global {
   interface ToolHubApi {
@@ -65,6 +66,10 @@ declare global {
     removeApp: (appId: string) => Promise<InstalledApp[]>;
     openAppWindow: (appId: string) => Promise<boolean>;
     pickInstallDirectory: () => Promise<string | null>;
+    refreshSystemAppsIndex: () => Promise<number>;
+    searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
+    openSystemApp: (appId: string) => Promise<boolean>;
+    subscribeQuickLauncherRequest: (callback: () => void) => () => void;
   }
 
   interface Window {

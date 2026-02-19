@@ -4,8 +4,11 @@ import { useToolHubState } from "../../composables/use-tool-hub-state";
 const {
     bridgeMessage,
     bridgeStatus,
+    refreshSystemAppsData,
     runtimeLabel,
     showOverview,
+    systemAppsMessage,
+    systemAppsStatus,
     testElectronBridge,
     toggleOverview,
 } = useToolHubState();
@@ -22,6 +25,13 @@ const {
                     @click="testElectronBridge"
                 >
                     Test Bridge
+                </button>
+                <button
+                    type="button"
+                    class="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
+                    @click="refreshSystemAppsData"
+                >
+                    Refresh System Apps
                 </button>
                 <button
                     type="button"
@@ -53,6 +63,23 @@ const {
             </span>
         </div>
         <p class="mt-2 text-xs text-slate-400">{{ bridgeMessage }}</p>
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+            <span
+                class="rounded-md px-2 py-1 text-xs"
+                :class="
+                    systemAppsStatus === 'success'
+                        ? 'bg-emerald-500/20 text-emerald-200'
+                        : systemAppsStatus === 'error'
+                          ? 'bg-rose-500/20 text-rose-200'
+                          : systemAppsStatus === 'loading'
+                            ? 'bg-amber-500/20 text-amber-200'
+                            : 'bg-slate-800 text-slate-300'
+                "
+            >
+                System Apps: {{ systemAppsStatus }}
+            </span>
+            <span class="text-xs text-slate-400">{{ systemAppsMessage }}</span>
+        </div>
 
         <div
             v-if="showOverview"

@@ -15,6 +15,7 @@ import {
   openAppWindow,
   pickInstallDirectory,
   pingBackend,
+  refreshSystemAppsIndex,
   removeApp,
   saveSettingsTabs,
   startApp,
@@ -72,6 +73,8 @@ function createToolHubState() {
 
   const bridgeStatus = ref<"idle" | "loading" | "success" | "error">("idle");
   const bridgeMessage = ref("Electron backend not connected yet.");
+  const systemAppsStatus = ref<"idle" | "loading" | "success" | "error">("idle");
+  const systemAppsMessage = ref("System app index can be refreshed manually.");
 
   const settingsStatus = ref<"idle" | "saving" | "success" | "error">("idle");
   const settingsMessage = ref("Edit tabs and save to local SQLite.");
@@ -235,6 +238,26 @@ function createToolHubState() {
     } catch (error) {
       bridgeStatus.value = "error";
       bridgeMessage.value = `Ping failed: ${formatError(error)}`;
+    }
+  }
+
+  async function refreshSystemAppsData() {
+    if (!isElectronRuntime()) {
+      systemAppsStatus.value = "error";
+      systemAppsMessage.value =
+        "System apps refresh is only available in Electron runtime.";
+      return;
+    }
+
+    systemAppsStatus.value = "loading";
+    systemAppsMessage.value = "Refreshing system app index...";
+    try {
+      const count = await refreshSystemAppsIndex();
+      systemAppsStatus.value = "success";
+      systemAppsMessage.value = `System app index refreshed. ${count} item(s) available.`;
+    } catch (error) {
+      systemAppsStatus.value = "error";
+      systemAppsMessage.value = `System app refresh failed: ${formatError(error)}`;
     }
   }
 
@@ -573,6 +596,8 @@ function createToolHubState() {
     autofillTabId,
     bridgeMessage,
     bridgeStatus,
+    systemAppsMessage,
+    systemAppsStatus,
     chooseInstallDirectory,
     claudeCliPath,
     createNewGeneratorProject,
@@ -615,6 +640,7 @@ function createToolHubState() {
     removeNodeApp,
     removeTabRow,
     runtimeLabel,
+    refreshSystemAppsData,
     resizeEmbeddedTerminal,
     saveClaudePathConfig,
     saveTabsToStorage,

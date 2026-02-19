@@ -1,9 +1,10 @@
-const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, nativeImage, shell } = require("electron");
 const path = require("node:path");
 
 let appsManagerModule = null;
 let settingsStoreModule = null;
 let appGeneratorModule = null;
+let systemAppsManagerModule = null;
 
 function getAppsManager() {
   if (!appsManagerModule) {
@@ -24,6 +25,13 @@ function getAppGenerator() {
     appGeneratorModule = require("./app-generator.cjs");
   }
   return appGeneratorModule;
+}
+
+function getSystemAppsManager() {
+  if (!systemAppsManagerModule) {
+    systemAppsManagerModule = require("./system-apps-manager.cjs");
+  }
+  return systemAppsManagerModule;
 }
 
 const devServerUrl = process.argv[2];
@@ -132,6 +140,32 @@ function createTray() {
   });
 }
 
+function stripWindowMenu(win) {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  if (typeof win.removeMenu === "function") {
+    win.removeMenu();
+  }
+  win.setMenuBarVisibility(false);
+}
+
+function attachAltSpaceMenuBlocker(win) {
+  win.webContents.on("before-input-event", (event, input) => {
+    const isAltSpace =
+      input.type === "keyDown" &&
+      input.alt &&
+      !input.control &&
+      !input.meta &&
+      !input.shift &&
+      (input.code === "Space" || input.key === " ");
+    if (isAltSpace) {
+      // Prevent the native Windows system menu (Restore/Minimize/Close) from opening.
+      event.preventDefault();
+    }
+  });
+}
+
 function createMainWindow() {
   bootTrace(`createMainWindow (isDev=${isDev})`);
   const win = new BrowserWindow({
@@ -148,12 +182,14 @@ function createMainWindow() {
     },
   });
   mainWindow = win;
+  stripWindowMenu(win);
   win.maximize();
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: "deny" };
   });
+  attachAltSpaceMenuBlocker(win);
 
   win.on("show", updateTrayMenu);
   win.on("hide", updateTrayMenu);
@@ -244,6 +280,38 @@ function createMainWindow() {
   return win;
 }
 
+function emitQuickLauncherOpen() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    showMainWindow();
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  showMainWindow();
+
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    mainWindow.webContents.once("did-finish-load", () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("quick-launcher:open");
+      }
+    });
+    return;
+  }
+
+  mainWindow.webContents.send("quick-launcher:open");
+}
+
+function registerQuickLauncherHotkey() {
+  const accelerator = "Alt+Space";
+  const success = globalShortcut.register(accelerator, () => {
+    emitQuickLauncherOpen();
+  });
+  if (!success) {
+    console.warn(`[shortcut] Failed to register global shortcut: ${accelerator}`);
+  }
+}
+
 async function openAppWindowById(appId) {
   const existing = appWindows.get(appId);
   if (existing && !existing.isDestroyed()) {
@@ -278,6 +346,8 @@ async function openAppWindowById(appId) {
   });
 
   appWindows.set(appId, win);
+  stripWindowMenu(win);
+  attachAltSpaceMenuBlocker(win);
   win.on("closed", () => {
     appWindows.delete(appId);
   });
@@ -570,26 +640,48 @@ ipcMain.handle("apps:pick-install-directory", async () => {
   return result.filePaths[0];
 });
 
+ipcMain.handle("system-apps:refresh", async () => {
+  return getSystemAppsManager().refreshSystemAppsIndex();
+});
+
+ipcMain.handle("system-apps:search", async (_event, query, limit) => {
+  return getSystemAppsManager().searchSystemApps(query, limit);
+});
+
+ipcMain.handle("system-apps:open", async (_event, appId) => {
+  return getSystemAppsManager().openSystemApp(appId);
+});
+
 app.whenReady().then(() => {
   bootTrace("app.whenReady");
+  Menu.setApplicationMenu(null);
   createMainWindow();
   createTray();
+  registerQuickLauncherHotkey();
 
   const bootAppsManager = () => {
     void getAppsManager().initializeAppsManager().catch((error) => {
       console.error("Apps manager init failed:", error);
     });
   };
+  const bootSystemAppsIndex = () => {
+    void getSystemAppsManager().refreshSystemAppsIndex().catch((error) => {
+      console.warn("System apps index init failed:", error);
+    });
+  };
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.once("did-finish-load", () => {
       setTimeout(bootAppsManager, 300);
+      setTimeout(bootSystemAppsIndex, 600);
     });
     mainWindow.webContents.once("did-fail-load", () => {
       setTimeout(bootAppsManager, 300);
+      setTimeout(bootSystemAppsIndex, 600);
     });
   } else {
     setTimeout(bootAppsManager, 800);
+    setTimeout(bootSystemAppsIndex, 1200);
   }
 
   app.on("activate", () => {
@@ -600,6 +692,10 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+});
+
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on("window-all-closed", () => {

@@ -101,4 +101,25 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   pickInstallDirectory() {
     return ipcRenderer.invoke("apps:pick-install-directory");
   },
+  refreshSystemAppsIndex() {
+    return ipcRenderer.invoke("system-apps:refresh");
+  },
+  searchSystemApps(query, limit) {
+    return ipcRenderer.invoke("system-apps:search", query, limit);
+  },
+  openSystemApp(appId) {
+    return ipcRenderer.invoke("system-apps:open", appId);
+  },
+  subscribeQuickLauncherRequest(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const listener = () => {
+      callback();
+    };
+    ipcRenderer.on("quick-launcher:open", listener);
+    return () => {
+      ipcRenderer.removeListener("quick-launcher:open", listener);
+    };
+  },
 });
