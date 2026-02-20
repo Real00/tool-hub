@@ -14,6 +14,7 @@ let unsubscribeQuickLauncherRequest: (() => void) | null = null;
 
 const isSettingsRoute = computed(() => route.name === "settings");
 const isGeneratorRoute = computed(() => route.name === "generator");
+const isQuickLauncherRoute = computed(() => route.name === "quick-launcher");
 
 function handleTabSelect(tabId: string) {
     activeTab.value = tabId;
@@ -55,7 +56,7 @@ function handleQuickLauncherClose() {
 
 onMounted(() => {
     init();
-    if (isElectronRuntime()) {
+    if (isElectronRuntime() && !isQuickLauncherRoute.value) {
         unsubscribeQuickLauncherRequest = subscribeQuickLauncherRequest(() => {
             quickLauncherOpen.value = true;
         });
@@ -70,7 +71,16 @@ onUnmounted(() => {
 </script>
 
 <template>
-    <div class="relative min-h-screen bg-slate-950 text-slate-100">
+    <div
+        v-if="isQuickLauncherRoute"
+        class="min-h-screen bg-slate-950 text-slate-100"
+    >
+        <RouterView />
+    </div>
+    <div
+        v-else
+        class="relative min-h-screen bg-slate-950 text-slate-100"
+    >
         <div
             class="pointer-events-none absolute inset-0 bg-mesh-glow opacity-70"
         />

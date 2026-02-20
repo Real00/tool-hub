@@ -12,6 +12,13 @@ import type {
   GeneratorTerminalState,
 } from "../types/generator";
 
+export interface QuickLauncherWindowSizePayload {
+  mode: "compact" | "expanded";
+  resultCount?: number;
+  showEmptyState?: boolean;
+  showPayloadHint?: boolean;
+}
+
 interface ToolHubApi {
   ping: (name: string) => Promise<string>;
   getSettingsTabs: () => Promise<TabDefinition[]>;
@@ -71,6 +78,8 @@ interface ToolHubApi {
   refreshSystemAppsIndex: () => Promise<number>;
   searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
   openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
+  closeQuickLauncherWindow: () => Promise<boolean>;
+  setQuickLauncherWindowSize: (payload: QuickLauncherWindowSizePayload) => Promise<boolean>;
   subscribeQuickLauncherRequest: (callback: () => void) => () => void;
 }
 
@@ -238,6 +247,16 @@ export function searchSystemApps(query: string, limit = 12): Promise<SystemAppEn
 
 export function openSystemApp(appId: string, launchPayload?: string): Promise<boolean> {
   return getApi().openSystemApp(appId, launchPayload);
+}
+
+export function closeQuickLauncherWindow(): Promise<boolean> {
+  return getApi().closeQuickLauncherWindow();
+}
+
+export function setQuickLauncherWindowSize(
+  payload: QuickLauncherWindowSizePayload,
+): Promise<boolean> {
+  return getApi().setQuickLauncherWindowSize(payload);
 }
 
 export function subscribeQuickLauncherRequest(callback: () => void): () => void {

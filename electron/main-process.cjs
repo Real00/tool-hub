@@ -1,5 +1,17 @@
-const { app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, nativeImage, shell } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  dialog,
+  globalShortcut,
+  ipcMain,
+  nativeImage,
+  screen,
+  shell,
+} = require("electron");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
 let appsManagerModule = null;
 let settingsStoreModule = null;
@@ -40,14 +52,35 @@ const APP_NAME = "Tool Hub";
 const bootTraceEnabled = process.env.TOOL_HUB_BOOT_LOG === "1";
 const bootStartAt = Date.now();
 const APP_RUNTIME_LAUNCH_PAYLOAD_CHANNEL = "app-runtime:launch-payload";
+const QUICK_LAUNCHER_SIZE_COMPACT = "compact";
+const QUICK_LAUNCHER_SIZE_EXPANDED = "expanded";
 
 let mainWindow = null;
+let quickLauncherWindow = null;
+let quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
+let quickLauncherSizeState = {
+  mode: QUICK_LAUNCHER_SIZE_COMPACT,
+  resultCount: 0,
+  showEmptyState: false,
+  showPayloadHint: false,
+};
 let tray = null;
 let isQuitting = false;
 let isClosePromptVisible = false;
 const appWindows = new Map();
 const runtimeWindowStateByWebContentsId = new Map();
 const terminalSubscriptions = new Map();
+
+function resolveRendererEntryUrl(hashPath = "/workspace") {
+  const normalizedHash = hashPath.startsWith("/") ? hashPath : `/${hashPath}`;
+  if (isDev) {
+    return `${devServerUrl}#${normalizedHash}`;
+  }
+  const fileUrl = pathToFileURL(
+    path.join(__dirname, "..", "dist", "index.html"),
+  ).toString();
+  return `${fileUrl}#${normalizedHash}`;
+}
 
 function bootTrace(message) {
   if (!bootTraceEnabled) {
@@ -91,7 +124,8 @@ function hideMainWindow() {
 }
 
 function buildTrayMenu() {
-  const isVisible = !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
+  const isVisible =
+    !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
   return Menu.buildFromTemplate([
     {
       label: isVisible ? "隐藏窗口" : "打开窗口",
@@ -278,9 +312,7 @@ function createMainWindow() {
     }
   });
 
-  const loadPromise = isDev
-    ? win.loadURL(devServerUrl)
-    : win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+  const loadPromise = win.loadURL(resolveRendererEntryUrl("/workspace"));
 
   void loadPromise.catch((error) => {
     clearTimeout(showTimer);
@@ -295,26 +327,205 @@ function createMainWindow() {
   return win;
 }
 
-function emitQuickLauncherOpen() {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    showMainWindow();
+function normalizeQuickLauncherSizeMode(input) {
+  return input === QUICK_LAUNCHER_SIZE_EXPANDED
+    ? QUICK_LAUNCHER_SIZE_EXPANDED
+    : QUICK_LAUNCHER_SIZE_COMPACT;
+}
+
+function normalizeQuickLauncherSizeState(input) {
+  if (typeof input === "string") {
+    return {
+      mode: normalizeQuickLauncherSizeMode(input),
+      resultCount: 0,
+      showEmptyState: false,
+      showPayloadHint: false,
+    };
   }
-  if (!mainWindow || mainWindow.isDestroyed()) {
+
+  const state = input && typeof input === "object" ? input : {};
+  const numericCount = Number(state.resultCount ?? 0);
+  const resultCount = Number.isFinite(numericCount)
+    ? Math.max(0, Math.min(20, Math.floor(numericCount)))
+    : 0;
+  return {
+    mode: normalizeQuickLauncherSizeMode(state.mode),
+    resultCount,
+    showEmptyState: state.showEmptyState === true,
+    showPayloadHint: state.showPayloadHint === true,
+  };
+}
+
+function getQuickLauncherBounds(input = QUICK_LAUNCHER_SIZE_COMPACT) {
+  const state = normalizeQuickLauncherSizeState(input);
+  const mode = state.mode;
+  const cursorPoint = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursorPoint);
+  const { x, y, width, height } = display.workArea;
+
+  const compactWidth = Math.min(700, Math.max(480, Math.floor(width * 0.36)));
+  const expandedWidth = Math.min(860, Math.max(580, Math.floor(width * 0.5)));
+  const compactHeight = 52;
+
+  const resultRows = Math.min(state.resultCount, 7);
+  const maxVisibleRows = 7;
+  const resultPanelHeight = state.resultCount > 0 ? maxVisibleRows * 36 + 4 : 0;
+  const emptyPanelHeight = state.showEmptyState ? 66 : 0;
+  const payloadHintHeight = state.showPayloadHint ? 22 : 0;
+  const expandedContentHeight = Math.max(
+    resultPanelHeight,
+    emptyPanelHeight,
+    payloadHintHeight,
+  );
+  const expandedHeightBase =
+    compactHeight + (expandedContentHeight > 0 ? 4 + expandedContentHeight : 0);
+  const expandedHeight = Math.min(
+    Math.max(90, expandedHeightBase),
+    Math.min(520, Math.floor(height * 0.72)),
+  );
+  const minimumHeight =
+    mode === QUICK_LAUNCHER_SIZE_EXPANDED ? 90 : compactHeight;
+  const maximumHeight = Math.min(700, Math.floor(height * 0.9));
+
+  const launcherHeight =
+    mode === QUICK_LAUNCHER_SIZE_EXPANDED
+      ? expandedHeight
+      : compactHeight;
+
+  const launcherWidth =
+    mode === QUICK_LAUNCHER_SIZE_EXPANDED ? expandedWidth : compactWidth;
+  const launcherX = Math.round(x + (width - launcherWidth) / 2);
+  const launcherY = Math.round(
+    y +
+      (mode === QUICK_LAUNCHER_SIZE_EXPANDED
+        ? Math.max(34, Math.floor(height * 0.14))
+        : Math.max(24, Math.floor(height * 0.22))),
+  );
+  return {
+    x: launcherX,
+    y: launcherY,
+    width: launcherWidth,
+    height: launcherHeight,
+  };
+}
+
+function applyQuickLauncherWindowSize(input = QUICK_LAUNCHER_SIZE_COMPACT) {
+  const state = normalizeQuickLauncherSizeState(input);
+  quickLauncherSizeMode = state.mode;
+  quickLauncherSizeState = state;
+
+  const win = quickLauncherWindow;
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  const bounds = getQuickLauncherBounds(state);
+  win.setBounds(bounds, true);
+}
+
+function closeQuickLauncherWindow() {
+  if (!quickLauncherWindow || quickLauncherWindow.isDestroyed()) {
+    quickLauncherWindow = null;
+    quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
+    quickLauncherSizeState = normalizeQuickLauncherSizeState(
+      QUICK_LAUNCHER_SIZE_COMPACT,
+    );
+    return;
+  }
+  quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
+  quickLauncherSizeState = normalizeQuickLauncherSizeState(
+    QUICK_LAUNCHER_SIZE_COMPACT,
+  );
+  quickLauncherWindow.close();
+}
+
+function createQuickLauncherWindow() {
+  if (quickLauncherWindow && !quickLauncherWindow.isDestroyed()) {
+    return quickLauncherWindow;
+  }
+
+  const bounds = getQuickLauncherBounds(quickLauncherSizeState);
+  const win = new BrowserWindow({
+    ...bounds,
+    show: false,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: true,
+    backgroundColor: "#020617",
+    webPreferences: {
+      preload: path.join(__dirname, "preload-bridge.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  quickLauncherWindow = win;
+  stripWindowMenu(win);
+  attachWindowKeyboardShortcuts(win);
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+  win.on("blur", () => {
+    if (isQuitting) {
+      return;
+    }
+    closeQuickLauncherWindow();
+  });
+  win.on("closed", () => {
+    if (quickLauncherWindow === win) {
+      quickLauncherWindow = null;
+    }
+  });
+
+  void win
+    .loadURL(resolveRendererEntryUrl("/quick-launcher"))
+    .catch((error) => {
+      console.error("Failed to load quick launcher window:", error);
+      closeQuickLauncherWindow();
+    });
+
+  return win;
+}
+
+function showQuickLauncherWindow() {
+  quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
+  quickLauncherSizeState = normalizeQuickLauncherSizeState(
+    QUICK_LAUNCHER_SIZE_COMPACT,
+  );
+  const win = createQuickLauncherWindow();
+  if (!win || win.isDestroyed()) {
     return;
   }
 
-  showMainWindow();
+  applyQuickLauncherWindowSize(quickLauncherSizeState);
 
-  if (mainWindow.webContents.isLoadingMainFrame()) {
-    mainWindow.webContents.once("did-finish-load", () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("quick-launcher:open");
+  if (win.webContents.isLoadingMainFrame()) {
+    win.once("ready-to-show", () => {
+      if (!win.isDestroyed()) {
+        win.show();
+        win.focus();
       }
     });
     return;
   }
 
-  mainWindow.webContents.send("quick-launcher:open");
+  win.show();
+  win.focus();
+}
+
+function emitQuickLauncherOpen() {
+  if (
+    quickLauncherWindow &&
+    !quickLauncherWindow.isDestroyed() &&
+    quickLauncherWindow.isVisible()
+  ) {
+    closeQuickLauncherWindow();
+    return;
+  }
+  showQuickLauncherWindow();
 }
 
 function registerQuickLauncherHotkey() {
@@ -323,7 +534,9 @@ function registerQuickLauncherHotkey() {
     emitQuickLauncherOpen();
   });
   if (!success) {
-    console.warn(`[shortcut] Failed to register global shortcut: ${accelerator}`);
+    console.warn(
+      `[shortcut] Failed to register global shortcut: ${accelerator}`,
+    );
   }
 }
 
@@ -345,7 +558,12 @@ function getRuntimeStateByWebContents(webContents) {
   return runtimeWindowStateByWebContentsId.get(webContents.id) ?? null;
 }
 
-function setRuntimeWindowLaunchPayload(win, appId, launchPayloadInput, emitUpdate = false) {
+function setRuntimeWindowLaunchPayload(
+  win,
+  appId,
+  launchPayloadInput,
+  emitUpdate = false,
+) {
   if (!win || win.isDestroyed()) {
     return;
   }
@@ -421,14 +639,24 @@ async function openAppWindowById(appId, launchPayloadInput) {
     appWindows.delete(appId);
     runtimeWindowStateByWebContentsId.delete(webContentsId);
   });
-  win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    if (level >= 2) {
-      console.warn(`[app-window:${appId}] console(${level}) ${sourceId}:${line} ${message}`);
-    }
-  });
-  win.webContents.on("did-fail-load", (_event, code, description, validatedUrl) => {
-    console.error(`[app-window:${appId}] did-fail-load code=${code} url=${validatedUrl} ${description}`);
-  });
+  win.webContents.on(
+    "console-message",
+    (_event, level, message, line, sourceId) => {
+      if (level >= 2) {
+        console.warn(
+          `[app-window:${appId}] console(${level}) ${sourceId}:${line} ${message}`,
+        );
+      }
+    },
+  );
+  win.webContents.on(
+    "did-fail-load",
+    (_event, code, description, validatedUrl) => {
+      console.error(
+        `[app-window:${appId}] did-fail-load code=${code} url=${validatedUrl} ${description}`,
+      );
+    },
+  );
   win.webContents.on("render-process-gone", (_event, details) => {
     console.error(
       `[app-window:${appId}] render-process-gone reason=${details?.reason ?? "unknown"} exitCode=${details?.exitCode ?? "unknown"}`,
@@ -551,22 +779,36 @@ ipcMain.handle("generator:list-projects", async () => {
   return getAppGenerator().listProjects();
 });
 
-ipcMain.handle("generator:read-project-file", async (_event, projectId, filePath) => {
-  return getAppGenerator().readProjectFile(projectId, filePath);
-});
+ipcMain.handle(
+  "generator:read-project-file",
+  async (_event, projectId, filePath) => {
+    return getAppGenerator().readProjectFile(projectId, filePath);
+  },
+);
 
-ipcMain.handle("generator:chat-project", async (_event, projectId, message, cliPathOverride) => {
-  return getAppGenerator().chatInProject(
-    getSettingsStore(),
-    projectId,
-    message,
-    cliPathOverride,
-  );
-});
+ipcMain.handle(
+  "generator:chat-project",
+  async (_event, projectId, message, cliPathOverride) => {
+    return getAppGenerator().chatInProject(
+      getSettingsStore(),
+      projectId,
+      message,
+      cliPathOverride,
+    );
+  },
+);
 
-ipcMain.handle("generator:install-project", async (_event, projectId, tabId, overwriteExisting) => {
-  return getAppGenerator().installProjectApp(getAppsManager(), projectId, tabId, overwriteExisting);
-});
+ipcMain.handle(
+  "generator:install-project",
+  async (_event, projectId, tabId, overwriteExisting) => {
+    return getAppGenerator().installProjectApp(
+      getAppsManager(),
+      projectId,
+      tabId,
+      overwriteExisting,
+    );
+  },
+);
 
 ipcMain.handle("generator:get-terminal", async (_event, projectId) => {
   return getAppGenerator().getProjectTerminal(projectId);
@@ -576,17 +818,27 @@ ipcMain.handle("generator:start-terminal", async (_event, projectId) => {
   return getAppGenerator().startProjectTerminal(projectId);
 });
 
-ipcMain.handle("generator:terminal-input", async (_event, projectId, text, appendNewline) => {
-  return getAppGenerator().sendProjectTerminalInput(projectId, text, appendNewline);
-});
+ipcMain.handle(
+  "generator:terminal-input",
+  async (_event, projectId, text, appendNewline) => {
+    return getAppGenerator().sendProjectTerminalInput(
+      projectId,
+      text,
+      appendNewline,
+    );
+  },
+);
 
 ipcMain.handle("generator:stop-terminal", async (_event, projectId) => {
   return getAppGenerator().stopProjectTerminal(projectId);
 });
 
-ipcMain.handle("generator:resize-terminal", async (_event, projectId, cols, rows) => {
-  return getAppGenerator().resizeProjectTerminal(projectId, cols, rows);
-});
+ipcMain.handle(
+  "generator:resize-terminal",
+  async (_event, projectId, cols, rows) => {
+    return getAppGenerator().resizeProjectTerminal(projectId, cols, rows);
+  },
+);
 
 ipcMain.on("generator:terminal-subscribe", (event, projectId) => {
   const webContents = event.sender;
@@ -594,13 +846,16 @@ ipcMain.on("generator:terminal-subscribe", (event, projectId) => {
   const key = makeTerminalSubscriptionKey(webContentsId, projectId);
   removeTerminalSubscription(webContentsId, projectId);
 
-  const unsubscribe = getAppGenerator().subscribeProjectTerminal(projectId, (payload) => {
-    if (webContents.isDestroyed()) {
-      removeTerminalSubscription(webContentsId, projectId);
-      return;
-    }
-    webContents.send("generator:terminal-output", payload);
-  });
+  const unsubscribe = getAppGenerator().subscribeProjectTerminal(
+    projectId,
+    (payload) => {
+      if (webContents.isDestroyed()) {
+        removeTerminalSubscription(webContentsId, projectId);
+        return;
+      }
+      webContents.send("generator:terminal-output", payload);
+    },
+  );
   terminalSubscriptions.set(key, unsubscribe);
 
   webContents.once("destroyed", () => {
@@ -628,9 +883,16 @@ ipcMain.handle("apps:initialize-db", async () => {
   return getAppsManager().initializeAppsDatabase();
 });
 
-ipcMain.handle("apps:install-from-directory", async (_event, sourceDir, tabId, overwriteExisting) => {
-  return getAppsManager().installAppFromDirectory(sourceDir, tabId, overwriteExisting);
-});
+ipcMain.handle(
+  "apps:install-from-directory",
+  async (_event, sourceDir, tabId, overwriteExisting) => {
+    return getAppsManager().installAppFromDirectory(
+      sourceDir,
+      tabId,
+      overwriteExisting,
+    );
+  },
+);
 
 ipcMain.handle("apps:start", async (_event, appId) => {
   return getAppsManager().startApp(appId);
@@ -693,20 +955,29 @@ ipcMain.handle("app-runtime:file-read", async (event, filePath, options) => {
   return getAppsManager().readAppFile(appId, filePath, options);
 });
 
-ipcMain.handle("app-runtime:file-write", async (event, filePath, content, options) => {
-  const appId = requireRuntimeAppId(event);
-  return getAppsManager().writeAppFile(appId, filePath, content, options);
-});
+ipcMain.handle(
+  "app-runtime:file-write",
+  async (event, filePath, content, options) => {
+    const appId = requireRuntimeAppId(event);
+    return getAppsManager().writeAppFile(appId, filePath, content, options);
+  },
+);
 
-ipcMain.handle("app-runtime:system-file-read", async (event, filePath, options) => {
-  const appId = requireRuntimeAppId(event);
-  return getAppsManager().readSystemFile(appId, filePath, options);
-});
+ipcMain.handle(
+  "app-runtime:system-file-read",
+  async (event, filePath, options) => {
+    const appId = requireRuntimeAppId(event);
+    return getAppsManager().readSystemFile(appId, filePath, options);
+  },
+);
 
-ipcMain.handle("app-runtime:system-file-write", async (event, filePath, content, options) => {
-  const appId = requireRuntimeAppId(event);
-  return getAppsManager().writeSystemFile(appId, filePath, content, options);
-});
+ipcMain.handle(
+  "app-runtime:system-file-write",
+  async (event, filePath, content, options) => {
+    const appId = requireRuntimeAppId(event);
+    return getAppsManager().writeSystemFile(appId, filePath, content, options);
+  },
+);
 
 ipcMain.handle("apps:pick-install-directory", async () => {
   const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
@@ -732,6 +1003,16 @@ ipcMain.handle("system-apps:open", async (_event, appId, launchPayload) => {
   return getSystemAppsManager().openSystemApp(appId, launchPayload);
 });
 
+ipcMain.handle("quick-launcher:close", async () => {
+  closeQuickLauncherWindow();
+  return true;
+});
+
+ipcMain.handle("quick-launcher:set-size", async (_event, mode) => {
+  applyQuickLauncherWindowSize(mode);
+  return true;
+});
+
 app.whenReady().then(() => {
   bootTrace("app.whenReady");
   Menu.setApplicationMenu(null);
@@ -740,14 +1021,18 @@ app.whenReady().then(() => {
   registerQuickLauncherHotkey();
 
   const bootAppsManager = () => {
-    void getAppsManager().initializeAppsManager().catch((error) => {
-      console.error("Apps manager init failed:", error);
-    });
+    void getAppsManager()
+      .initializeAppsManager()
+      .catch((error) => {
+        console.error("Apps manager init failed:", error);
+      });
   };
   const bootSystemAppsIndex = () => {
-    void getSystemAppsManager().refreshSystemAppsIndex().catch((error) => {
-      console.warn("System apps index init failed:", error);
-    });
+    void getSystemAppsManager()
+      .refreshSystemAppsIndex()
+      .catch((error) => {
+        console.warn("System apps index init failed:", error);
+      });
   };
 
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -772,6 +1057,7 @@ app.whenReady().then(() => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  closeQuickLauncherWindow();
 });
 
 app.on("will-quit", () => {

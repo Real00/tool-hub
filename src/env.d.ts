@@ -74,6 +74,14 @@ declare global {
     refreshSystemAppsIndex: () => Promise<number>;
     searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
     openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
+    closeQuickLauncherWindow: () => Promise<boolean>;
+    setQuickLauncherWindowSize: (payload: {
+      mode: "compact" | "expanded";
+      resultCount?: number;
+      showEmptyState?: boolean;
+      showPayloadHint?: boolean;
+      contentHeight?: number;
+    }) => Promise<boolean>;
     subscribeQuickLauncherRequest: (callback: () => void) => () => void;
   }
 

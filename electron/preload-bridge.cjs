@@ -110,6 +110,12 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   openSystemApp(appId, launchPayload) {
     return ipcRenderer.invoke("system-apps:open", appId, launchPayload);
   },
+  closeQuickLauncherWindow() {
+    return ipcRenderer.invoke("quick-launcher:close");
+  },
+  setQuickLauncherWindowSize(payload) {
+    return ipcRenderer.invoke("quick-launcher:set-size", payload);
+  },
   subscribeQuickLauncherRequest(callback) {
     if (typeof callback !== "function") {
       return () => {};

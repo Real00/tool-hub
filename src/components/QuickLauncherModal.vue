@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   isElectronRuntime,
   openAppWindow,
@@ -21,13 +21,23 @@ interface LauncherResultItem {
   iconDataUrl?: string;
 }
 
+interface QuickLauncherSizePayload {
+  mode: "compact" | "expanded";
+  resultCount: number;
+  showEmptyState: boolean;
+  showPayloadHint: boolean;
+  contentHeight?: number;
+}
+
 const props = defineProps<{
   open: boolean;
   installedApps: InstalledApp[];
+  embedded?: boolean;
 }>();
 
 const emit = defineEmits<{
   close: [];
+  sizeMode: [payload: QuickLauncherSizePayload];
 }>();
 
 const SEARCH_LIMIT = 12;
@@ -35,6 +45,7 @@ const SYSTEM_SEARCH_LIMIT = 20;
 const INSTALLED_SEARCH_LIMIT = 20;
 
 const canSearchApps = isElectronRuntime();
+const modalRootRef = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLInputElement | null>(null);
 const query = ref("");
 const results = ref<LauncherResultItem[]>([]);
@@ -54,6 +65,59 @@ const placeholder = computed(() => {
   return canSearchApps
     ? "Search system and installed apps..."
     : "App search available in Electron";
+});
+
+const windowSizePayload = computed<QuickLauncherSizePayload>(() => {
+  const hasQuery = query.value.trim().length > 0;
+  const hasResults = results.value.length > 0 && launchPayloadTarget.value === null;
+  const showEmptyState =
+    launchPayloadTarget.value === null &&
+    !hasResults &&
+    (status.value === "loading" || status.value === "error" || hasQuery);
+  const showPayloadHint = launchPayloadTarget.value !== null;
+
+  if (!props.embedded) {
+    return {
+      mode: "expanded",
+      resultCount: hasResults ? results.value.length : 0,
+      showEmptyState,
+      showPayloadHint,
+    };
+  }
+  return {
+    mode: hasResults || showEmptyState || showPayloadHint ? "expanded" : "compact",
+    resultCount: hasResults ? results.value.length : 0,
+    showEmptyState,
+    showPayloadHint,
+  };
+});
+
+const wrapperClass = computed(() => {
+  if (props.embedded) {
+    return "mx-auto w-full";
+  }
+  return "fixed inset-0 z-50 flex items-start justify-center bg-slate-950/55 px-4 pt-[14vh] backdrop-blur-sm";
+});
+
+const panelClass = computed(() => {
+  if (props.embedded) {
+    return "w-full px-1 py-1";
+  }
+  return "w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-2xl";
+});
+
+const inputContainerClass = computed(() => {
+  if (props.embedded) {
+    return "px-0 py-0";
+  }
+  return "border-b border-slate-800 px-4 py-3";
+});
+
+const resultsPanelClass = computed(() => {
+  if (props.embedded) {
+    return "mt-1 h-[256px] overflow-y-auto rounded-xl border border-slate-700 bg-slate-950/95 shadow-2xl";
+  }
+  return "max-h-[56vh] overflow-y-auto py-1";
 });
 
 const emptyText = computed(() => {
@@ -86,6 +150,10 @@ function clearSearch() {
 
 function closeModal() {
   emit("close");
+}
+
+function updateMeasuredContentHeight() {
+  // Removed - no longer using measured content height
 }
 
 function tokenizeQuery(input: string): string[] {
@@ -407,10 +475,29 @@ watch(
   },
 );
 
+watch(
+  () => windowSizePayload.value,
+  (payload) => {
+    if (!props.open || !props.embedded) {
+      return;
+    }
+    emit("sizeMode", payload);
+  },
+  { immediate: true },
+);
+
 onBeforeUnmount(() => {
   if (searchTimer) {
     clearTimeout(searchTimer);
     searchTimer = null;
+  }
+});
+
+onMounted(async () => {
+  if (props.open) {
+    await nextTick();
+    inputRef.value?.focus();
+    inputRef.value?.select();
   }
 });
 </script>
@@ -418,13 +505,14 @@ onBeforeUnmount(() => {
 <template>
   <div
     v-if="props.open"
-    class="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/55 px-4 pt-[14vh] backdrop-blur-sm"
-    @click.self="closeModal"
+    ref="modalRootRef"
+    :class="wrapperClass"
+    @click.self="!props.embedded && closeModal()"
   >
     <section
-      class="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-2xl"
+      :class="panelClass"
     >
-      <div class="border-b border-slate-800 px-4 py-3">
+      <div :class="inputContainerClass">
         <input
           ref="inputRef"
           v-model="query"
@@ -436,14 +524,14 @@ onBeforeUnmount(() => {
         />
         <p
           v-if="launchPayloadTarget"
-          class="mt-2 text-xs text-cyan-300"
+          class="mt-1.5 text-xs text-cyan-300"
         >
           Selected: {{ launchPayloadTarget.name }}. Type payload and press Enter.
           Press Backspace on empty input to cancel.
         </p>
         <p
-          v-else
-          class="mt-2 text-xs text-slate-500"
+          v-else-if="!props.embedded"
+          class="mt-1.5 text-xs text-slate-500"
         >
           Shortcut: Alt + Space. Press Space to select highlighted app for payload input.
         </p>
@@ -451,13 +539,13 @@ onBeforeUnmount(() => {
 
       <div
         v-if="results.length > 0 && !launchPayloadTarget"
-        class="max-h-[52vh] overflow-y-auto py-1"
+        :class="resultsPanelClass"
       >
         <button
           v-for="(app, index) in results"
           :key="app.id"
           type="button"
-          class="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm transition"
+          class="flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm transition first:pt-2.5 last:pb-2.5"
           :class="
             activeIndex === index
               ? 'bg-cyan-500/15 text-cyan-100'
@@ -485,8 +573,12 @@ onBeforeUnmount(() => {
       </div>
 
       <p
-        v-if="results.length === 0 && !launchPayloadTarget"
-        class="px-4 py-4 text-xs text-slate-400"
+        v-if="
+          results.length === 0 &&
+          !launchPayloadTarget &&
+          (!props.embedded || windowSizePayload.mode === 'expanded')
+        "
+        :class="props.embedded ? 'mt-1 rounded-xl border border-slate-700 bg-slate-950/95 px-4 py-4 text-xs text-slate-400 shadow-2xl' : 'px-4 py-4 text-xs text-slate-400'"
       >
         {{ emptyText }}
       </p>
