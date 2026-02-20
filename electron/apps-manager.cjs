@@ -993,7 +993,7 @@ async function removeApp(appIdInput) {
   return listApps();
 }
 
-async function installAppFromDirectory(sourceDir, requestedTabId) {
+async function installAppFromDirectory(sourceDir, requestedTabId, overwriteExisting = false) {
   const sourceAbs = path.resolve(String(sourceDir ?? ""));
   if (!fs.existsSync(sourceAbs) || !fs.statSync(sourceAbs).isDirectory()) {
     throw new Error("Source path must be an existing directory.");
@@ -1011,8 +1011,28 @@ async function installAppFromDirectory(sourceDir, requestedTabId) {
 
   ensureDirs();
   const targetDir = path.join(resolveAppsRoot(), appId);
+  const shouldOverwrite = overwriteExisting === true;
+  const sameSourceAndTarget =
+    process.platform === "win32"
+      ? sourceAbs.toLowerCase() === targetDir.toLowerCase()
+      : sourceAbs === targetDir;
+
   if (fs.existsSync(targetDir)) {
-    throw new Error(`Target app directory already exists: ${targetDir}`);
+    if (!shouldOverwrite) {
+      throw new Error(`APP_ALREADY_INSTALLED:${appId}`);
+    }
+
+    if (sameSourceAndTarget) {
+      throw new Error("Source directory is already the installed target directory.");
+    }
+
+    const runtime = runningApps.get(appId);
+    if (runtime) {
+      runtime.child.kill();
+      runningApps.delete(appId);
+    }
+    appLogs.delete(appId);
+    fs.rmSync(targetDir, { recursive: true, force: true });
   }
 
   fs.cpSync(sourceAbs, targetDir, {

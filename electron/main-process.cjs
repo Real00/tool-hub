@@ -150,8 +150,21 @@ function stripWindowMenu(win) {
   win.setMenuBarVisibility(false);
 }
 
-function attachAltSpaceMenuBlocker(win) {
+function attachWindowKeyboardShortcuts(win) {
   win.webContents.on("before-input-event", (event, input) => {
+    const isF12 =
+      input.type === "keyDown" &&
+      !input.alt &&
+      !input.control &&
+      !input.meta &&
+      !input.shift &&
+      (input.code === "F12" || input.key === "F12");
+    if (isF12) {
+      event.preventDefault();
+      win.webContents.openDevTools({ mode: "detach", activate: true });
+      return;
+    }
+
     const isAltSpace =
       input.type === "keyDown" &&
       input.alt &&
@@ -189,7 +202,7 @@ function createMainWindow() {
     void shell.openExternal(url);
     return { action: "deny" };
   });
-  attachAltSpaceMenuBlocker(win);
+  attachWindowKeyboardShortcuts(win);
 
   win.on("show", updateTrayMenu);
   win.on("hide", updateTrayMenu);
@@ -347,7 +360,7 @@ async function openAppWindowById(appId) {
 
   appWindows.set(appId, win);
   stripWindowMenu(win);
-  attachAltSpaceMenuBlocker(win);
+  attachWindowKeyboardShortcuts(win);
   win.on("closed", () => {
     appWindows.delete(appId);
   });
@@ -489,8 +502,8 @@ ipcMain.handle("generator:chat-project", async (_event, projectId, message, cliP
   );
 });
 
-ipcMain.handle("generator:install-project", async (_event, projectId, tabId) => {
-  return getAppGenerator().installProjectApp(getAppsManager(), projectId, tabId);
+ipcMain.handle("generator:install-project", async (_event, projectId, tabId, overwriteExisting) => {
+  return getAppGenerator().installProjectApp(getAppsManager(), projectId, tabId, overwriteExisting);
 });
 
 ipcMain.handle("generator:get-terminal", async (_event, projectId) => {
@@ -553,8 +566,8 @@ ipcMain.handle("apps:initialize-db", async () => {
   return getAppsManager().initializeAppsDatabase();
 });
 
-ipcMain.handle("apps:install-from-directory", async (_event, sourceDir, tabId) => {
-  return getAppsManager().installAppFromDirectory(sourceDir, tabId);
+ipcMain.handle("apps:install-from-directory", async (_event, sourceDir, tabId, overwriteExisting) => {
+  return getAppsManager().installAppFromDirectory(sourceDir, tabId, overwriteExisting);
 });
 
 ipcMain.handle("apps:start", async (_event, appId) => {

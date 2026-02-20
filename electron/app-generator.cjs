@@ -1027,7 +1027,7 @@ async function chatInProject(settingsStore, projectIdInput, userMessage, cliPath
   };
 }
 
-async function installProjectApp(appsManager, projectIdInput, requestedTabId) {
+async function installProjectApp(appsManager, projectIdInput, requestedTabId, overwriteExisting = false) {
   const { projectId, projectDir } = resolveProjectDir(projectIdInput);
   if (!appsManager?.installAppFromDirectory) {
     throw new Error("Apps manager is unavailable.");
@@ -1047,14 +1047,18 @@ async function installProjectApp(appsManager, projectIdInput, requestedTabId) {
   }
 
   const tabId = normalizeTabId(requestedTabId, "workspace");
+  const shouldOverwrite = overwriteExisting === true;
   const existing = appsManager.getAppById
     ? await appsManager.getAppById(summary.appId)
     : null;
+  if (existing && !shouldOverwrite) {
+    throw new Error(`APP_ALREADY_INSTALLED:${summary.appId}`);
+  }
   if (existing && appsManager.removeApp) {
     await appsManager.removeApp(summary.appId);
   }
 
-  const installedApps = await appsManager.installAppFromDirectory(projectDir, tabId);
+  const installedApps = await appsManager.installAppFromDirectory(projectDir, tabId, shouldOverwrite);
   const metadata = readProjectMetadata(projectDir);
   metadata.updatedAt = now();
   metadata.runningOutput = runtime.runningOutput;

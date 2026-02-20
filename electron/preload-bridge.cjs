@@ -37,8 +37,8 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   generatorChatInProject(projectId, message, cliPathOverride) {
     return ipcRenderer.invoke("generator:chat-project", projectId, message, cliPathOverride);
   },
-  installGeneratorProjectApp(projectId, tabId) {
-    return ipcRenderer.invoke("generator:install-project", projectId, tabId);
+  installGeneratorProjectApp(projectId, tabId, overwriteExisting) {
+    return ipcRenderer.invoke("generator:install-project", projectId, tabId, overwriteExisting);
   },
   getGeneratorProjectTerminal(projectId) {
     return ipcRenderer.invoke("generator:get-terminal", projectId);
@@ -80,8 +80,8 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   initializeAppsDatabase() {
     return ipcRenderer.invoke("apps:initialize-db");
   },
-  installAppFromDirectory(sourceDir, tabId) {
-    return ipcRenderer.invoke("apps:install-from-directory", sourceDir, tabId);
+  installAppFromDirectory(sourceDir, tabId, overwriteExisting) {
+    return ipcRenderer.invoke("apps:install-from-directory", sourceDir, tabId, overwriteExisting);
   },
   startApp(appId) {
     return ipcRenderer.invoke("apps:start", appId);

@@ -42,6 +42,18 @@ function formatError(error: unknown): string {
   return String(error);
 }
 
+const APP_ALREADY_INSTALLED_PREFIX = "APP_ALREADY_INSTALLED:";
+
+function parseAlreadyInstalledAppId(error: unknown): string | null {
+  const message = formatError(error).trim();
+  const pattern = /APP_ALREADY_INSTALLED:([a-z0-9-]+)/i;
+  const match = message.match(pattern);
+  if (match) {
+    return String(match[1] ?? "").trim() || "";
+  }
+  return null;
+}
+
 function toSummary(project: GeneratorProjectDetail): GeneratorProjectSummary {
   return {
     projectId: project.projectId,
@@ -529,7 +541,11 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorMessage.value = "Installing app from selected project...";
 
     try {
-      const result = await installGeneratorProjectApp(generatorProjectId.value, generatorTabId.value);
+      const result = await installGeneratorProjectApp(
+        generatorProjectId.value,
+        generatorTabId.value,
+        false,
+      );
       generatorProject.value = result.project;
       upsertProjectSummary(toSummary(result.project));
       await loadGeneratorProjects();
@@ -541,6 +557,44 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
       generatorStatus.value = "success";
       generatorMessage.value = "Project app installed successfully.";
     } catch (error) {
+      const existingAppId = parseAlreadyInstalledAppId(error);
+      if (existingAppId !== null) {
+        const displayId = existingAppId || "this app";
+        const shouldOverwrite = window.confirm(
+          `App "${displayId}" is already installed. Overwrite existing installation?`,
+        );
+        if (!shouldOverwrite) {
+          generatorStatus.value = "idle";
+          generatorMessage.value = "Install canceled.";
+          return;
+        }
+
+        generatorStatus.value = "loading";
+        generatorMessage.value = `Overwriting app "${displayId}"...`;
+        try {
+          const result = await installGeneratorProjectApp(
+            generatorProjectId.value,
+            generatorTabId.value,
+            true,
+          );
+          generatorProject.value = result.project;
+          upsertProjectSummary(toSummary(result.project));
+          await loadGeneratorProjects();
+          options.onInstalled?.({
+            apps: result.installedApps,
+            generatedAppId: result.generatedAppId,
+            tabId: generatorTabId.value,
+          });
+          generatorStatus.value = "success";
+          generatorMessage.value = "Project app overwritten successfully.";
+          return;
+        } catch (overwriteError) {
+          generatorStatus.value = "error";
+          generatorMessage.value = `Overwrite failed: ${formatError(overwriteError)}`;
+          return;
+        }
+      }
+
       generatorStatus.value = "error";
       generatorMessage.value = `Install failed: ${formatError(error)}`;
     }

@@ -29,6 +29,21 @@ function formatError(error: unknown): string {
   return String(error);
 }
 
+const APP_ALREADY_INSTALLED_PREFIX = "APP_ALREADY_INSTALLED:";
+
+function parseAlreadyInstalledAppId(error: unknown): string | null {
+  const message = formatError(error).trim();
+  const pattern = /APP_ALREADY_INSTALLED:([a-z0-9-]+)/i;
+  const match = message.match(pattern);
+  if (match) {
+    return String(match[1] ?? "").trim() || "";
+  }
+  if (message.includes("Target app directory already exists")) {
+    return "";
+  }
+  return null;
+}
+
 function normalizeTabId(input: string): string {
   return input
     .trim()
@@ -389,12 +404,46 @@ function createToolHubState() {
       const list = await installAppFromDirectory(
         installSourceDir.value.trim(),
         installTabId.value,
+        false,
       );
       applyApps(list);
       appsStatus.value = "success";
       appsMessage.value = `App installed successfully (tabId=${installTabId.value}).`;
       installSourceDir.value = "";
     } catch (error) {
+      const existingAppId = parseAlreadyInstalledAppId(error);
+      if (existingAppId !== null) {
+        const displayId = existingAppId || "this app";
+        const shouldOverwrite = window.confirm(
+          `App "${displayId}" is already installed. Overwrite existing installation?`,
+        );
+        if (!shouldOverwrite) {
+          appsStatus.value = "idle";
+          appsMessage.value = "Install canceled.";
+          return;
+        }
+
+        appsStatus.value = "loading";
+        appsMessage.value = `Overwriting app "${displayId}"...`;
+
+        try {
+          const list = await installAppFromDirectory(
+            installSourceDir.value.trim(),
+            installTabId.value,
+            true,
+          );
+          applyApps(list);
+          appsStatus.value = "success";
+          appsMessage.value = `App overwritten successfully (tabId=${installTabId.value}).`;
+          installSourceDir.value = "";
+          return;
+        } catch (overwriteError) {
+          appsStatus.value = "error";
+          appsMessage.value = `Overwrite failed: ${formatError(overwriteError)}`;
+          return;
+        }
+      }
+
       appsStatus.value = "error";
       appsMessage.value = `Install failed: ${formatError(error)}`;
     }

@@ -35,6 +35,7 @@ interface ToolHubApi {
   installGeneratorProjectApp: (
     projectId: string,
     tabId: string,
+    overwriteExisting?: boolean,
   ) => Promise<GeneratorInstallResult>;
   getGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
   startGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
@@ -56,7 +57,11 @@ interface ToolHubApi {
   getAppsRoot: () => Promise<AppsRootInfo>;
   listApps: () => Promise<InstalledApp[]>;
   initializeAppsDatabase: () => Promise<InstalledApp[]>;
-  installAppFromDirectory: (sourceDir: string, tabId?: string) => Promise<InstalledApp[]>;
+  installAppFromDirectory: (
+    sourceDir: string,
+    tabId?: string,
+    overwriteExisting?: boolean,
+  ) => Promise<InstalledApp[]>;
   startApp: (appId: string) => Promise<InstalledApp[]>;
   stopApp: (appId: string) => Promise<InstalledApp[]>;
   getAppLogs: (appId: string) => Promise<string[]>;
@@ -139,8 +144,9 @@ export function generatorChatInProject(
 export function installGeneratorProjectApp(
   projectId: string,
   tabId: string,
+  overwriteExisting = false,
 ): Promise<GeneratorInstallResult> {
-  return getApi().installGeneratorProjectApp(projectId, tabId);
+  return getApi().installGeneratorProjectApp(projectId, tabId, overwriteExisting);
 }
 
 export function getGeneratorProjectTerminal(projectId: string): Promise<GeneratorTerminalState> {
@@ -190,8 +196,12 @@ export function initializeAppsDatabase(): Promise<InstalledApp[]> {
   return getApi().initializeAppsDatabase();
 }
 
-export function installAppFromDirectory(sourceDir: string, tabId?: string): Promise<InstalledApp[]> {
-  return getApi().installAppFromDirectory(sourceDir, tabId);
+export function installAppFromDirectory(
+  sourceDir: string,
+  tabId?: string,
+  overwriteExisting = false,
+): Promise<InstalledApp[]> {
+  return getApi().installAppFromDirectory(sourceDir, tabId, overwriteExisting);
 }
 
 export function startApp(appId: string): Promise<InstalledApp[]> {

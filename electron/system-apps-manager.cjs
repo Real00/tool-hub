@@ -176,6 +176,24 @@ function normalizeAbsolutePathCandidate(input) {
   return value;
 }
 
+function isLikelyUwpAppId(appId) {
+  return String(appId ?? "").includes("!");
+}
+
+function extractAbsolutePathFromAppId(appId) {
+  const text = String(appId ?? "").trim();
+  const direct = normalizeAbsolutePathCandidate(text);
+  if (direct) {
+    return direct;
+  }
+
+  const match = text.match(/[A-Za-z]:\\[^<>:"|?*\r\n]+/);
+  if (!match) {
+    return null;
+  }
+  return normalizeAbsolutePathCandidate(match[0]);
+}
+
 function chunkArray(items, chunkSize) {
   const output = [];
   if (!Array.isArray(items) || items.length === 0) {
@@ -199,6 +217,8 @@ async function resolveStartMenuShortcutMetadata(shortcutPaths) {
   for (const batch of batches) {
     const payload = Buffer.from(JSON.stringify(batch), "utf8").toString("base64");
     const command = [
+      "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8",
+      "$OutputEncoding=[Console]::OutputEncoding",
       `$json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))`,
       "$items=$json|ConvertFrom-Json",
       "if($items -isnot [System.Array]){$items=@($items)}",
@@ -207,11 +227,7 @@ async function resolveStartMenuShortcutMetadata(shortcutPaths) {
       "foreach($item in $items){",
       "  try{",
       "    $shortcut=$shell.CreateShortcut([string]$item)",
-      "    $rows+=[pscustomobject]@{",
-      "      shortcutPath=[string]$item;",
-      "      targetPath=[string]$shortcut.TargetPath;",
-      "      iconLocation=[string]$shortcut.IconLocation;",
-      "    }",
+      "    $rows+=[pscustomobject]@{shortcutPath=[string]$item;targetPath=[string]$shortcut.TargetPath;iconLocation=[string]$shortcut.IconLocation}",
       "  }catch{}",
       "}",
       "$rows|ConvertTo-Json -Compress",
@@ -224,6 +240,7 @@ async function resolveStartMenuShortcutMetadata(shortcutPaths) {
         {
           windowsHide: true,
           maxBuffer: 4 * 1024 * 1024,
+          encoding: "utf8",
         },
       );
       const json = String(stdout ?? "").trim();
@@ -266,7 +283,9 @@ async function enrichStartMenuAppIcons(items) {
   const shortcutPaths = items
     .filter((item) => path.extname(item.launchTarget).toLowerCase() === ".lnk")
     .map((item) => item.launchTarget);
+
   const shortcutRows = await resolveStartMenuShortcutMetadata(shortcutPaths);
+
   const shortcutByPath = new Map(
     shortcutRows.map((row) => [String(row?.shortcutPath ?? "").toLowerCase(), row]),
   );
@@ -293,7 +312,8 @@ async function enrichStartMenuAppIcons(items) {
     const extension = path.extname(item.launchTarget).toLowerCase();
 
     if (extension === ".lnk") {
-      const row = shortcutByPath.get(item.launchTarget.toLowerCase());
+      const lookupKey = item.launchTarget.toLowerCase();
+      const row = shortcutByPath.get(lookupKey);
       if (!row) {
         continue;
       }
@@ -329,6 +349,8 @@ async function resolveUwpIconPathMap(appIds) {
   for (const batch of batches) {
     const payload = Buffer.from(JSON.stringify(batch), "utf8").toString("base64");
     const command = [
+      "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8",
+      "$OutputEncoding=[Console]::OutputEncoding",
       `$json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))`,
       "$items=$json|ConvertFrom-Json",
       "if($items -isnot [System.Array]){$items=@($items)}",
@@ -350,9 +372,7 @@ async function resolveUwpIconPathMap(appIds) {
       "  $name=[System.IO.Path]::GetFileNameWithoutExtension($basePath)",
       "  $ext=[System.IO.Path]::GetExtension($basePath)",
       "  if(-not $dir -or -not (Test-Path -LiteralPath $dir)){return $null}",
-      "  $candidates=Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |",
-      "    Where-Object { $_.BaseName -like ($name + '*') -and $_.Extension -eq $ext } |",
-      "    Sort-Object Name",
+      "  $candidates=Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.BaseName -like ($name + '*') -and $_.Extension -eq $ext } | Sort-Object Name",
       "  if($candidates.Count -gt 0){",
       "    $preferred=$candidates | Where-Object { $_.Name -match 'targetsize-32|targetsize-48|scale-200|scale-100' } | Select-Object -First 1",
       "    if($preferred){return $preferred.FullName}",
@@ -384,18 +404,10 @@ async function resolveUwpIconPathMap(appIds) {
       "      }",
       "    }",
       "    if(-not $appNode){continue}",
-      "    $logoCandidates=@(",
-      "      [string]$appNode.GetAttribute('Square44x44Logo'),",
-      "      [string]$appNode.GetAttribute('Square150x150Logo'),",
-      "      [string]$appNode.GetAttribute('Logo')",
-      "    )",
+      "    $logoCandidates=@([string]$appNode.GetAttribute('Square44x44Logo'),[string]$appNode.GetAttribute('Square150x150Logo'),[string]$appNode.GetAttribute('Logo'))",
       "    foreach($child in $appNode.ChildNodes){",
       "      if($child.LocalName -ne 'VisualElements'){continue}",
-      "      $logoCandidates += @(",
-      "        [string]$child.GetAttribute('Square44x44Logo'),",
-      "        [string]$child.GetAttribute('Square150x150Logo'),",
-      "        [string]$child.GetAttribute('Logo')",
-      "      )",
+      "      $logoCandidates += @([string]$child.GetAttribute('Square44x44Logo'),[string]$child.GetAttribute('Square150x150Logo'),[string]$child.GetAttribute('Logo'))",
       "    }",
       "    $resolvedPath=$null",
       "    foreach($logoValue in $logoCandidates){",
@@ -417,6 +429,7 @@ async function resolveUwpIconPathMap(appIds) {
         {
           windowsHide: true,
           maxBuffer: 8 * 1024 * 1024,
+          encoding: "utf8",
         },
       );
       const json = String(stdout ?? "").trim();
@@ -445,7 +458,7 @@ async function enrichUwpAppIcons(items) {
   }
 
   const appIds = items
-    .filter((item) => item.launchType === "uwp")
+    .filter((item) => item.launchType === "uwp" && isLikelyUwpAppId(item.launchTarget))
     .map((item) => item.launchTarget);
   const iconPathMap = await resolveUwpIconPathMap(appIds);
   if (iconPathMap.size === 0) {
@@ -550,7 +563,11 @@ async function collectStartMenuApps() {
 }
 
 async function collectUwpApps() {
-  const command = "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress";
+  const command = [
+    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8",
+    "$OutputEncoding=[Console]::OutputEncoding",
+    "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress",
+  ].join(";");
   try {
     const { stdout } = await execFileAsync(
       "powershell.exe",
@@ -558,6 +575,7 @@ async function collectUwpApps() {
       {
         windowsHide: true,
         maxBuffer: 4 * 1024 * 1024,
+        encoding: "utf8",
       },
     );
 
@@ -576,18 +594,22 @@ async function collectUwpApps() {
       if (!name || !appId) {
         continue;
       }
-      const id = `uwp:${appId.toLowerCase()}`;
+      const launchPath = extractAbsolutePathFromAppId(appId);
+      const launchType = launchPath ? "path" : "uwp";
+      const launchTarget = launchPath || appId;
+      const source = launchPath ? "Start Menu" : "UWP";
+      const id = `${launchType}:${launchTarget.toLowerCase()}`;
       output.push({
         id,
         name,
-        source: "UWP",
-        launchType: "uwp",
-        launchTarget: appId,
+        source,
+        launchType,
+        launchTarget,
         launchArgs: [],
-        iconPath: null,
+        iconPath: launchPath,
         keywords: [],
         matchBoost: 0,
-        searchText: makeSearchText(name, appId, [], "UWP"),
+        searchText: makeSearchText(name, launchTarget, [], source),
         pinyinInitials: buildPinyinInitials([name]),
       });
     }

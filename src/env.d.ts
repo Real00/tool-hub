@@ -38,6 +38,7 @@ declare global {
     installGeneratorProjectApp: (
       projectId: string,
       tabId: string,
+      overwriteExisting?: boolean,
     ) => Promise<GeneratorInstallResult>;
     getGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
     startGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
@@ -59,7 +60,11 @@ declare global {
     getAppsRoot: () => Promise<AppsRootInfo>;
     listApps: () => Promise<InstalledApp[]>;
     initializeAppsDatabase: () => Promise<InstalledApp[]>;
-    installAppFromDirectory: (sourceDir: string, tabId?: string) => Promise<InstalledApp[]>;
+    installAppFromDirectory: (
+      sourceDir: string,
+      tabId?: string,
+      overwriteExisting?: boolean,
+    ) => Promise<InstalledApp[]>;
     startApp: (appId: string) => Promise<InstalledApp[]>;
     stopApp: (appId: string) => Promise<InstalledApp[]>;
     getAppLogs: (appId: string) => Promise<string[]>;
