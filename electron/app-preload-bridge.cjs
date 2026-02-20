@@ -4,6 +4,18 @@ contextBridge.exposeInMainWorld("toolHubAppApi", {
   getRuntimeInfo() {
     return ipcRenderer.invoke("app-runtime:get-info");
   },
+  subscribeLaunchPayload(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const listener = (_event, payload) => {
+      callback(payload);
+    };
+    ipcRenderer.on("app-runtime:launch-payload", listener);
+    return () => {
+      ipcRenderer.removeListener("app-runtime:launch-payload", listener);
+    };
+  },
   files: {
     read(filePath, options) {
       return ipcRenderer.invoke("app-runtime:file-read", filePath, options);

@@ -66,11 +66,11 @@ interface ToolHubApi {
   stopApp: (appId: string) => Promise<InstalledApp[]>;
   getAppLogs: (appId: string) => Promise<string[]>;
   removeApp: (appId: string) => Promise<InstalledApp[]>;
-  openAppWindow: (appId: string) => Promise<boolean>;
+  openAppWindow: (appId: string, launchPayload?: string) => Promise<boolean>;
   pickInstallDirectory: () => Promise<string | null>;
   refreshSystemAppsIndex: () => Promise<number>;
   searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
-  openSystemApp: (appId: string) => Promise<boolean>;
+  openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
   subscribeQuickLauncherRequest: (callback: () => void) => () => void;
 }
 
@@ -220,8 +220,8 @@ export function removeApp(appId: string): Promise<InstalledApp[]> {
   return getApi().removeApp(appId);
 }
 
-export function openAppWindow(appId: string): Promise<boolean> {
-  return getApi().openAppWindow(appId);
+export function openAppWindow(appId: string, launchPayload?: string): Promise<boolean> {
+  return getApi().openAppWindow(appId, launchPayload);
 }
 
 export function pickInstallDirectory(): Promise<string | null> {
@@ -236,8 +236,8 @@ export function searchSystemApps(query: string, limit = 12): Promise<SystemAppEn
   return getApi().searchSystemApps(query, limit);
 }
 
-export function openSystemApp(appId: string): Promise<boolean> {
-  return getApi().openSystemApp(appId);
+export function openSystemApp(appId: string, launchPayload?: string): Promise<boolean> {
+  return getApi().openSystemApp(appId, launchPayload);
 }
 
 export function subscribeQuickLauncherRequest(callback: () => void): () => void {

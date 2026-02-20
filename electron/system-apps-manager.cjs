@@ -913,6 +913,7 @@ async function toPublicEntry(entry) {
     name: entry.name,
     source: entry.source,
     launchType: entry.launchType,
+    acceptsLaunchPayload: supportsSystemAppLaunchPayload(entry),
     iconDataUrl: iconDataUrl || undefined,
   };
 }
@@ -953,7 +954,43 @@ async function searchSystemApps(queryInput, limitInput = SEARCH_LIMIT_DEFAULT) {
   return Promise.all(topEntries.map((entry) => toPublicEntry(entry)));
 }
 
-async function openSystemApp(appIdInput) {
+function normalizeLaunchPayload(input) {
+  if (input === undefined || input === null) {
+    return null;
+  }
+  const text = String(input).trim();
+  return text ? text : null;
+}
+
+function supportsSystemAppLaunchPayload(entry) {
+  if (!entry || entry.launchType !== "command") {
+    return false;
+  }
+  return String(entry.id || "").startsWith("builtin:");
+}
+
+function buildCommandLaunchArgs(entry, launchPayload) {
+  const baseArgs = Array.isArray(entry.launchArgs) ? [...entry.launchArgs] : [];
+  if (!launchPayload) {
+    return baseArgs;
+  }
+
+  if (entry.id === "builtin:command-prompt") {
+    return ["/K", launchPayload];
+  }
+  if (entry.id === "builtin:powershell") {
+    return ["-NoExit", "-Command", launchPayload];
+  }
+  if (entry.id === "builtin:windows-settings") {
+    const normalizedPayload = launchPayload.toLowerCase().startsWith("ms-settings:")
+      ? launchPayload
+      : `ms-settings:${launchPayload}`;
+    return [normalizedPayload];
+  }
+  return [...baseArgs, launchPayload];
+}
+
+async function openSystemApp(appIdInput, launchPayloadInput) {
   if (!isWindowsRuntime()) {
     throw new Error("System app launcher is available on Windows only.");
   }
@@ -972,6 +1009,7 @@ async function openSystemApp(appIdInput) {
   if (!appEntry) {
     throw new Error(`App not found in system index: ${appId}`);
   }
+  const launchPayload = normalizeLaunchPayload(launchPayloadInput);
 
   if (appEntry.launchType === "path") {
     const errorMessage = await shell.openPath(appEntry.launchTarget);
@@ -991,10 +1029,11 @@ async function openSystemApp(appIdInput) {
   }
 
   if (appEntry.launchType === "command") {
+    const commandArgs = buildCommandLaunchArgs(appEntry, launchPayload);
     await new Promise((resolve, reject) => {
       const child = spawn(
         appEntry.launchTarget,
-        Array.isArray(appEntry.launchArgs) ? appEntry.launchArgs : [],
+        commandArgs,
         {
           windowsHide: true,
           detached: true,

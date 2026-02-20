@@ -18,6 +18,7 @@ interface LauncherResultItem {
   kind: "system" | "installed";
   targetId: string;
   score: number;
+  acceptsLaunchPayload: boolean;
   iconDataUrl?: string;
 }
 
@@ -47,11 +48,16 @@ const launcherStatus = ref<"idle" | "loading" | "error">("idle");
 const launcherMessage = ref("");
 const launcherPanelOpen = ref(false);
 const launcherActiveIndex = ref(-1);
+const launcherPayloadTarget = ref<LauncherResultItem | null>(null);
 
 let launcherSearchTimer: ReturnType<typeof setTimeout> | null = null;
 let launcherSearchToken = 0;
+let launcherQueryBeforePayload = "";
 
 const launcherPlaceholder = computed(() => {
+  if (launcherPayloadTarget.value) {
+    return `Type launch payload for ${launcherPayloadTarget.value.name}...`;
+  }
   return canSearchApps
     ? "Search system and installed apps..."
     : "App search available in Electron";
@@ -146,11 +152,15 @@ function searchInstalledApps(query: string): LauncherResultItem[] {
     name: app.name,
     source: app.running ? "Installed / Running" : "Installed",
     score,
+    acceptsLaunchPayload: true,
   }));
 }
 
 async function runLauncherSearch() {
   if (!canSearchApps) {
+    return;
+  }
+  if (launcherPayloadTarget.value) {
     return;
   }
 
@@ -182,6 +192,7 @@ async function runLauncherSearch() {
         source: app.source,
         iconDataUrl: app.iconDataUrl,
         score: 180 - index,
+        acceptsLaunchPayload: !!app.acceptsLaunchPayload,
       }),
     );
 
@@ -227,6 +238,8 @@ function scheduleLauncherSearch() {
 
 function clearLauncher() {
   launcherQuery.value = "";
+  launcherPayloadTarget.value = null;
+  launcherQueryBeforePayload = "";
   launcherPanelOpen.value = false;
   launcherSearchToken += 1;
   resetLauncherResults();
@@ -234,6 +247,9 @@ function clearLauncher() {
 
 watch(launcherQuery, () => {
   if (!canSearchApps) {
+    return;
+  }
+  if (launcherPayloadTarget.value) {
     return;
   }
 
@@ -253,6 +269,9 @@ watch(launcherQuery, () => {
 watch(
   () => props.installedApps,
   () => {
+    if (launcherPayloadTarget.value) {
+      return;
+    }
     if (!launcherQuery.value.trim() || !launcherPanelOpen.value) {
       return;
     }
@@ -281,13 +300,17 @@ async function openLauncherItem(index: number) {
     return;
   }
 
+  await executeLauncherTarget(target, undefined);
+}
+
+async function executeLauncherTarget(target: LauncherResultItem, launchPayload?: string) {
   launcherPanelOpen.value = false;
   try {
     if (target.kind === "system") {
-      await openSystemApp(target.targetId);
+      await openSystemApp(target.targetId, launchPayload);
     } else {
       await startApp(target.targetId);
-      await openAppWindow(target.targetId);
+      await openAppWindow(target.targetId, launchPayload);
     }
     clearLauncher();
   } catch (error) {
@@ -296,12 +319,38 @@ async function openLauncherItem(index: number) {
   }
 }
 
+function activateLauncherPayloadTarget(index: number) {
+  const target = launcherResults.value[index];
+  if (!target || !target.acceptsLaunchPayload) {
+    return;
+  }
+  launcherQueryBeforePayload = launcherQuery.value.trim();
+  launcherPayloadTarget.value = target;
+  launcherQuery.value = "";
+  launcherMessage.value = "";
+  launcherPanelOpen.value = false;
+  resetLauncherResults();
+}
+
+function cancelLauncherPayloadTarget() {
+  const restoreQuery = launcherQueryBeforePayload;
+  launcherPayloadTarget.value = null;
+  launcherQueryBeforePayload = "";
+  launcherQuery.value = restoreQuery;
+}
+
 function handleLauncherKeydown(event: KeyboardEvent) {
   if (!canSearchApps) {
     return;
   }
+  if (event.isComposing) {
+    return;
+  }
 
   if (event.key === "ArrowDown") {
+    if (launcherPayloadTarget.value) {
+      return;
+    }
     event.preventDefault();
     launcherPanelOpen.value = true;
     moveLauncherSelection(1);
@@ -309,13 +358,35 @@ function handleLauncherKeydown(event: KeyboardEvent) {
   }
 
   if (event.key === "ArrowUp") {
+    if (launcherPayloadTarget.value) {
+      return;
+    }
     event.preventDefault();
     launcherPanelOpen.value = true;
     moveLauncherSelection(-1);
     return;
   }
 
+  if (event.key === " ") {
+    if (!launcherPayloadTarget.value && launcherActiveIndex.value >= 0) {
+      event.preventDefault();
+      activateLauncherPayloadTarget(launcherActiveIndex.value);
+    }
+    return;
+  }
+
+  if (event.key === "Backspace" && launcherPayloadTarget.value && !launcherQuery.value) {
+    event.preventDefault();
+    cancelLauncherPayloadTarget();
+    return;
+  }
+
   if (event.key === "Enter") {
+    if (launcherPayloadTarget.value) {
+      event.preventDefault();
+      void executeLauncherTarget(launcherPayloadTarget.value, launcherQuery.value);
+      return;
+    }
     if (launcherPanelOpen.value && launcherActiveIndex.value >= 0) {
       event.preventDefault();
       void openLauncherItem(launcherActiveIndex.value);
@@ -325,12 +396,19 @@ function handleLauncherKeydown(event: KeyboardEvent) {
 
   if (event.key === "Escape") {
     event.preventDefault();
-    launcherPanelOpen.value = false;
+    if (launcherPayloadTarget.value) {
+      cancelLauncherPayloadTarget();
+      return;
+    }
+    clearLauncher();
   }
 }
 
 function handleLauncherFocus() {
   if (!canSearchApps) {
+    return;
+  }
+  if (launcherPayloadTarget.value) {
     return;
   }
   launcherPanelOpen.value = true;
@@ -395,7 +473,7 @@ onBeforeUnmount(() => {
           />
 
           <div
-            v-if="launcherPanelOpen && canSearchApps"
+            v-if="launcherPanelOpen && canSearchApps && !launcherPayloadTarget"
             class="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-40 overflow-hidden rounded-xl border border-slate-700 bg-slate-950/95 shadow-2xl backdrop-blur"
           >
             <div
@@ -439,6 +517,13 @@ onBeforeUnmount(() => {
               {{ launcherEmptyText }}
             </p>
           </div>
+          <p
+            v-if="launcherPayloadTarget"
+            class="mt-2 text-xs text-cyan-300"
+          >
+            Selected: {{ launcherPayloadTarget.name }}. Type payload and press Enter.
+            Press Backspace on empty input to cancel.
+          </p>
         </div>
 
         <div class="inline-flex items-center gap-1 rounded-xl bg-slate-900/70 p-1 ring-1 ring-slate-700/80">

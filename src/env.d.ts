@@ -69,11 +69,11 @@ declare global {
     stopApp: (appId: string) => Promise<InstalledApp[]>;
     getAppLogs: (appId: string) => Promise<string[]>;
     removeApp: (appId: string) => Promise<InstalledApp[]>;
-    openAppWindow: (appId: string) => Promise<boolean>;
+    openAppWindow: (appId: string, launchPayload?: string) => Promise<boolean>;
     pickInstallDirectory: () => Promise<string | null>;
     refreshSystemAppsIndex: () => Promise<number>;
     searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
-    openSystemApp: (appId: string) => Promise<boolean>;
+    openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
     subscribeQuickLauncherRequest: (callback: () => void) => () => void;
   }
 

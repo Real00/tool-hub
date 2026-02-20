@@ -95,8 +95,8 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   removeApp(appId) {
     return ipcRenderer.invoke("apps:remove", appId);
   },
-  openAppWindow(appId) {
-    return ipcRenderer.invoke("apps:open-window", appId);
+  openAppWindow(appId, launchPayload) {
+    return ipcRenderer.invoke("apps:open-window", appId, launchPayload);
   },
   pickInstallDirectory() {
     return ipcRenderer.invoke("apps:pick-install-directory");
@@ -107,8 +107,8 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   searchSystemApps(query, limit) {
     return ipcRenderer.invoke("system-apps:search", query, limit);
   },
-  openSystemApp(appId) {
-    return ipcRenderer.invoke("system-apps:open", appId);
+  openSystemApp(appId, launchPayload) {
+    return ipcRenderer.invoke("system-apps:open", appId, launchPayload);
   },
   subscribeQuickLauncherRequest(callback) {
     if (typeof callback !== "function") {

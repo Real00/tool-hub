@@ -165,6 +165,13 @@
           </div>
 
           <div class="panel">
+            <p><strong>Launch Payload</strong></p>
+            <p class="subtle">Use search, press Space to select app, then type payload and press Enter.</p>
+            <p class="mono" id="launch-payload-value">(none)</p>
+            <p class="subtle mono" id="launch-payload-meta">updated: -</p>
+          </div>
+
+          <div class="panel">
             <p><strong>Host KV Storage</strong></p>
             <p class="subtle mono" id="kv-runtime-info">runtime: loading...</p>
             <div class="row">
@@ -238,6 +245,8 @@
       const card = document.querySelector(".card");
       const kvRuntimeInfo = document.getElementById("kv-runtime-info");
       const kvOutput = document.getElementById("kv-output");
+      const launchPayloadValue = document.getElementById("launch-payload-value");
+      const launchPayloadMeta = document.getElementById("launch-payload-meta");
       const kvKeyInput = document.getElementById("kv-key");
       const kvValueInput = document.getElementById("kv-value");
       const fileOutput = document.getElementById("file-output");
@@ -245,6 +254,7 @@
       const anyPathContent = document.getElementById("any-path-content");
       const anyPathOutput = document.getElementById("any-path-output");
       let hostAppApi = null;
+      let unsubscribeLaunchPayload = null;
       try {
         hostAppApi = window.toolHubAppApi ?? null;
       } catch (error) {
@@ -264,6 +274,16 @@
         showToast._timer = setTimeout(() => {
           toast.textContent = "";
         }, 1600);
+      }
+
+      function renderLaunchPayload(payload, updatedAt) {
+        const normalizedPayload = typeof payload === "string" ? payload : "";
+        launchPayloadValue.textContent = normalizedPayload || "(none)";
+        if (updatedAt) {
+          launchPayloadMeta.textContent = `updated: ${new Date(updatedAt).toLocaleString()}`;
+          return;
+        }
+        launchPayloadMeta.textContent = "updated: -";
       }
 
       document.getElementById("counter-add").addEventListener("click", () => {
@@ -328,13 +348,32 @@
           .getRuntimeInfo()
           .then((info) => {
             kvRuntimeInfo.textContent = `runtime appId: ${info?.appId || "-"}`;
+            renderLaunchPayload(info?.launchPayload, info?.launchPayloadUpdatedAt);
           })
           .catch(() => {
             kvRuntimeInfo.textContent = "runtime appId: unavailable";
+            renderLaunchPayload(null, null);
           });
       } else {
         kvRuntimeInfo.textContent = "runtime: toolHubAppApi is unavailable";
+        renderLaunchPayload(null, null);
       }
+
+      if (hostAppApi?.subscribeLaunchPayload) {
+        unsubscribeLaunchPayload = hostAppApi.subscribeLaunchPayload((payload) => {
+          renderLaunchPayload(payload?.launchPayload, payload?.launchPayloadUpdatedAt);
+          showToast("Launch payload updated.");
+        });
+      }
+
+      window.addEventListener("beforeunload", () => {
+        try {
+          unsubscribeLaunchPayload?.();
+        } catch {
+          // Ignore unsubscribe errors.
+        }
+        unsubscribeLaunchPayload = null;
+      });
 
       document.getElementById("kv-load-btn").addEventListener("click", () => {
         runKvAction(() => hostAppApi.storage.get(kvKeyInput.value));

@@ -17,6 +17,7 @@ interface LauncherResultItem {
   kind: "system" | "installed";
   targetId: string;
   score: number;
+  acceptsLaunchPayload: boolean;
   iconDataUrl?: string;
 }
 
@@ -40,11 +41,16 @@ const results = ref<LauncherResultItem[]>([]);
 const status = ref<"idle" | "loading" | "error">("idle");
 const message = ref("");
 const activeIndex = ref(-1);
+const launchPayloadTarget = ref<LauncherResultItem | null>(null);
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let searchToken = 0;
+let searchQueryBeforePayload = "";
 
 const placeholder = computed(() => {
+  if (launchPayloadTarget.value) {
+    return `Type launch payload for ${launchPayloadTarget.value.name}...`;
+  }
   return canSearchApps
     ? "Search system and installed apps..."
     : "App search available in Electron";
@@ -72,6 +78,8 @@ function resetResults() {
 function clearSearch() {
   query.value = "";
   message.value = "";
+  launchPayloadTarget.value = null;
+  searchQueryBeforePayload = "";
   searchToken += 1;
   resetResults();
 }
@@ -150,11 +158,15 @@ function searchInstalledApps(input: string): LauncherResultItem[] {
     name: app.name,
     source: app.running ? "Installed / Running" : "Installed",
     score,
+    acceptsLaunchPayload: true,
   }));
 }
 
 async function runSearch() {
   if (!canSearchApps || !props.open) {
+    return;
+  }
+  if (launchPayloadTarget.value) {
     return;
   }
 
@@ -185,6 +197,7 @@ async function runSearch() {
         source: app.source,
         iconDataUrl: app.iconDataUrl,
         score: 180 - index,
+        acceptsLaunchPayload: !!app.acceptsLaunchPayload,
       }),
     );
 
@@ -249,12 +262,16 @@ async function openResult(index: number) {
     return;
   }
 
+  await executeLaunchTarget(target, undefined);
+}
+
+async function executeLaunchTarget(target: LauncherResultItem, launchPayload?: string) {
   try {
     if (target.kind === "system") {
-      await openSystemApp(target.targetId);
+      await openSystemApp(target.targetId, launchPayload);
     } else {
       await startApp(target.targetId);
-      await openAppWindow(target.targetId);
+      await openAppWindow(target.targetId, launchPayload);
     }
     clearSearch();
     closeModal();
@@ -264,20 +281,68 @@ async function openResult(index: number) {
   }
 }
 
+function activateLaunchPayloadTarget(index: number) {
+  const target = results.value[index];
+  if (!target || !target.acceptsLaunchPayload) {
+    return;
+  }
+  searchQueryBeforePayload = query.value.trim();
+  launchPayloadTarget.value = target;
+  query.value = "";
+  message.value = "";
+  resetResults();
+}
+
+function cancelLaunchPayloadTarget() {
+  const restoreQuery = searchQueryBeforePayload;
+  launchPayloadTarget.value = null;
+  searchQueryBeforePayload = "";
+  query.value = restoreQuery;
+}
+
 function handleInputKeydown(event: KeyboardEvent) {
+  if (event.isComposing) {
+    return;
+  }
+
   if (event.key === "ArrowDown") {
+    if (launchPayloadTarget.value) {
+      return;
+    }
     event.preventDefault();
     moveSelection(1);
     return;
   }
 
   if (event.key === "ArrowUp") {
+    if (launchPayloadTarget.value) {
+      return;
+    }
     event.preventDefault();
     moveSelection(-1);
     return;
   }
 
+  if (event.key === " ") {
+    if (!launchPayloadTarget.value && activeIndex.value >= 0) {
+      event.preventDefault();
+      activateLaunchPayloadTarget(activeIndex.value);
+    }
+    return;
+  }
+
+  if (event.key === "Backspace" && launchPayloadTarget.value && !query.value) {
+    event.preventDefault();
+    cancelLaunchPayloadTarget();
+    return;
+  }
+
   if (event.key === "Enter") {
+    if (launchPayloadTarget.value) {
+      event.preventDefault();
+      void executeLaunchTarget(launchPayloadTarget.value, query.value);
+      return;
+    }
     if (activeIndex.value >= 0) {
       event.preventDefault();
       void openResult(activeIndex.value);
@@ -287,6 +352,10 @@ function handleInputKeydown(event: KeyboardEvent) {
 
   if (event.key === "Escape") {
     event.preventDefault();
+    if (launchPayloadTarget.value) {
+      cancelLaunchPayloadTarget();
+      return;
+    }
     clearSearch();
     closeModal();
   }
@@ -294,6 +363,9 @@ function handleInputKeydown(event: KeyboardEvent) {
 
 watch(query, () => {
   if (!props.open || !canSearchApps) {
+    return;
+  }
+  if (launchPayloadTarget.value) {
     return;
   }
 
@@ -312,6 +384,9 @@ watch(query, () => {
 watch(
   () => props.installedApps,
   () => {
+    if (launchPayloadTarget.value) {
+      return;
+    }
     if (!props.open || !query.value.trim()) {
       return;
     }
@@ -359,11 +434,23 @@ onBeforeUnmount(() => {
           :disabled="!canSearchApps"
           @keydown="handleInputKeydown"
         />
-        <p class="mt-2 text-xs text-slate-500">Shortcut: Alt + Space</p>
+        <p
+          v-if="launchPayloadTarget"
+          class="mt-2 text-xs text-cyan-300"
+        >
+          Selected: {{ launchPayloadTarget.name }}. Type payload and press Enter.
+          Press Backspace on empty input to cancel.
+        </p>
+        <p
+          v-else
+          class="mt-2 text-xs text-slate-500"
+        >
+          Shortcut: Alt + Space. Press Space to select highlighted app for payload input.
+        </p>
       </div>
 
       <div
-        v-if="results.length > 0"
+        v-if="results.length > 0 && !launchPayloadTarget"
         class="max-h-[52vh] overflow-y-auto py-1"
       >
         <button
@@ -398,7 +485,7 @@ onBeforeUnmount(() => {
       </div>
 
       <p
-        v-if="results.length === 0"
+        v-if="results.length === 0 && !launchPayloadTarget"
         class="px-4 py-4 text-xs text-slate-400"
       >
         {{ emptyText }}

@@ -39,12 +39,14 @@ const isDev = Boolean(devServerUrl);
 const APP_NAME = "Tool Hub";
 const bootTraceEnabled = process.env.TOOL_HUB_BOOT_LOG === "1";
 const bootStartAt = Date.now();
+const APP_RUNTIME_LAUNCH_PAYLOAD_CHANNEL = "app-runtime:launch-payload";
 
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let isClosePromptVisible = false;
 const appWindows = new Map();
+const runtimeWindowStateByWebContentsId = new Map();
 const terminalSubscriptions = new Map();
 
 function bootTrace(message) {
@@ -325,9 +327,61 @@ function registerQuickLauncherHotkey() {
   }
 }
 
-async function openAppWindowById(appId) {
+function normalizeLaunchPayload(input) {
+  if (input === undefined || input === null) {
+    return { provided: input !== undefined, value: null };
+  }
+  const text = String(input).trim();
+  return {
+    provided: true,
+    value: text ? text : null,
+  };
+}
+
+function getRuntimeStateByWebContents(webContents) {
+  if (!webContents || webContents.isDestroyed()) {
+    return null;
+  }
+  return runtimeWindowStateByWebContentsId.get(webContents.id) ?? null;
+}
+
+function setRuntimeWindowLaunchPayload(win, appId, launchPayloadInput, emitUpdate = false) {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+
+  const webContents = win.webContents;
+  const webContentsId = webContents.id;
+  const previous = runtimeWindowStateByWebContentsId.get(webContentsId) ?? null;
+  const normalized = normalizeLaunchPayload(launchPayloadInput);
+  const next = previous
+    ? { ...previous }
+    : {
+        appId,
+        launchPayload: null,
+        launchPayloadUpdatedAt: Date.now(),
+      };
+
+  next.appId = appId;
+  if (normalized.provided || !previous) {
+    next.launchPayload = normalized.value;
+    next.launchPayloadUpdatedAt = Date.now();
+  }
+
+  runtimeWindowStateByWebContentsId.set(webContentsId, next);
+
+  if (emitUpdate && normalized.provided && !webContents.isDestroyed()) {
+    webContents.send(APP_RUNTIME_LAUNCH_PAYLOAD_CHANNEL, {
+      launchPayload: next.launchPayload,
+      launchPayloadUpdatedAt: next.launchPayloadUpdatedAt,
+    });
+  }
+}
+
+async function openAppWindowById(appId, launchPayloadInput) {
   const existing = appWindows.get(appId);
   if (existing && !existing.isDestroyed()) {
+    setRuntimeWindowLaunchPayload(existing, appId, launchPayloadInput, true);
     if (existing.isMinimized()) {
       existing.restore();
     }
@@ -359,10 +413,13 @@ async function openAppWindowById(appId) {
   });
 
   appWindows.set(appId, win);
+  setRuntimeWindowLaunchPayload(win, appId, launchPayloadInput, false);
   stripWindowMenu(win);
   attachWindowKeyboardShortcuts(win);
+  const webContentsId = win.webContents.id;
   win.on("closed", () => {
     appWindows.delete(appId);
+    runtimeWindowStateByWebContentsId.delete(webContentsId);
   });
   win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     if (level >= 2) {
@@ -387,6 +444,7 @@ function closeAppWindowById(appId) {
     appWindows.delete(appId);
     return;
   }
+  runtimeWindowStateByWebContentsId.delete(win.webContents.id);
   win.close();
   appWindows.delete(appId);
 }
@@ -396,6 +454,10 @@ function getRuntimeAppIdByWebContents(webContents) {
     return null;
   }
   const webContentsId = webContents.id;
+  const runtimeState = runtimeWindowStateByWebContentsId.get(webContentsId);
+  if (runtimeState?.appId) {
+    return runtimeState.appId;
+  }
   for (const [appId, win] of appWindows.entries()) {
     if (!win || win.isDestroyed()) {
       continue;
@@ -587,13 +649,18 @@ ipcMain.handle("apps:remove", async (_event, appId) => {
   return getAppsManager().removeApp(appId);
 });
 
-ipcMain.handle("apps:open-window", async (_event, appId) => {
-  return openAppWindowById(appId);
+ipcMain.handle("apps:open-window", async (_event, appId, launchPayload) => {
+  return openAppWindowById(appId, launchPayload);
 });
 
 ipcMain.handle("app-runtime:get-info", async (event) => {
   const appId = requireRuntimeAppId(event);
-  return { appId };
+  const runtimeState = getRuntimeStateByWebContents(event.sender);
+  return {
+    appId,
+    launchPayload: runtimeState?.launchPayload ?? null,
+    launchPayloadUpdatedAt: runtimeState?.launchPayloadUpdatedAt ?? null,
+  };
 });
 
 ipcMain.handle("app-runtime:kv-get", async (event, key) => {
@@ -661,8 +728,8 @@ ipcMain.handle("system-apps:search", async (_event, query, limit) => {
   return getSystemAppsManager().searchSystemApps(query, limit);
 });
 
-ipcMain.handle("system-apps:open", async (_event, appId) => {
-  return getSystemAppsManager().openSystemApp(appId);
+ipcMain.handle("system-apps:open", async (_event, appId, launchPayload) => {
+  return getSystemAppsManager().openSystemApp(appId, launchPayload);
 });
 
 app.whenReady().then(() => {

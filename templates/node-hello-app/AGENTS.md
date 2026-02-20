@@ -196,7 +196,8 @@ Tool Hub 会在应用 UI 窗口注入 `window.toolHubAppApi`，可直接使用�
 
 可用方法：
 
-- `window.toolHubAppApi.getRuntimeInfo()` -> `{ appId }`
+- `window.toolHubAppApi.getRuntimeInfo()` -> `{ appId, launchPayload, launchPayloadUpdatedAt }`
+- `window.toolHubAppApi.subscribeLaunchPayload(callback)` -> `unsubscribe()`，payload 形如 `{ launchPayload, launchPayloadUpdatedAt }`
 - `window.toolHubAppApi.files.read(path, options?)` -> `{ path, content, truncated, size }`
 - `window.toolHubAppApi.files.write(path, content, options?)` -> `{ path, size, appended }`
 - `window.toolHubAppApi.systemFiles.read(absPath, options?)` -> `{ path, content, truncated, size }`
@@ -220,6 +221,33 @@ console.log(hosts.size);
 await window.toolHubAppApi.storage.set("ui.theme", { mode: "dark" });
 const item = await window.toolHubAppApi.storage.get("ui.theme");
 console.log(item.value?.mode);
+```
+
+快速启动携参示例（Hello App）：
+
+1. 在 Tool Hub 搜索框输入 `hello`
+2. 用方向键选中 `Hello App`
+3. 按 `Space` 进入 payload 输入模式
+4. 输入 `open dashboard` 后按 `Enter`
+5. 在 Hello App UI 的 `Launch Payload` 面板可看到 `open dashboard`
+6. 如果选错目标：
+   - 第一次按 `Esc`：取消当前选中并回到结果列表（可继续选别的应用）
+   - 第二次按 `Esc`：退出搜索
+
+UI 里读取 payload 的最小示例：
+
+```js
+const info = await window.toolHubAppApi.getRuntimeInfo();
+console.log("appId:", info.appId);
+console.log("launchPayload:", info.launchPayload);
+
+const unsubscribe = window.toolHubAppApi.subscribeLaunchPayload((payload) => {
+  console.log("payload updated:", payload.launchPayload);
+});
+
+window.addEventListener("beforeunload", () => {
+  unsubscribe();
+});
 ```
 
 ## 10. 推荐工程结构（进阶）
