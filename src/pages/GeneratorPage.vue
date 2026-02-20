@@ -3,5 +3,7 @@ import GeneratorPanel from "../components/settings/GeneratorPanel.vue";
 </script>
 
 <template>
-  <GeneratorPanel />
+  <div class="mx-auto w-full max-w-[1800px]">
+    <GeneratorPanel />
+  </div>
 </template>

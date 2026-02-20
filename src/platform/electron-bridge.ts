@@ -5,6 +5,7 @@ import type {
 } from "../types/settings";
 import type { AppsRootInfo, InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
+import type { UpdateState } from "../types/update";
 import type {
   ClaudeCliDetectionResult,
   GeneratorInstallResult,
@@ -80,6 +81,11 @@ interface ToolHubApi {
   openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
   closeQuickLauncherWindow: () => Promise<boolean>;
   setQuickLauncherWindowSize: (payload: QuickLauncherWindowSizePayload) => Promise<boolean>;
+  getUpdateState: () => Promise<UpdateState>;
+  checkForUpdates: () => Promise<UpdateState>;
+  downloadUpdate: () => Promise<UpdateState>;
+  installUpdateAndRestart: () => Promise<boolean>;
+  subscribeUpdateEvents: (callback: (state: UpdateState) => void) => () => void;
   subscribeQuickLauncherRequest: (callback: () => void) => () => void;
 }
 
@@ -257,6 +263,26 @@ export function setQuickLauncherWindowSize(
   payload: QuickLauncherWindowSizePayload,
 ): Promise<boolean> {
   return getApi().setQuickLauncherWindowSize(payload);
+}
+
+export function getUpdateState(): Promise<UpdateState> {
+  return getApi().getUpdateState();
+}
+
+export function checkForUpdates(): Promise<UpdateState> {
+  return getApi().checkForUpdates();
+}
+
+export function downloadUpdate(): Promise<UpdateState> {
+  return getApi().downloadUpdate();
+}
+
+export function installUpdateAndRestart(): Promise<boolean> {
+  return getApi().installUpdateAndRestart();
+}
+
+export function subscribeUpdateEvents(callback: (state: UpdateState) => void): () => void {
+  return getApi().subscribeUpdateEvents(callback);
 }
 
 export function subscribeQuickLauncherRequest(callback: () => void): () => void {

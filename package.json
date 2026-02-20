@@ -11,9 +11,13 @@
     "preview": "vite preview",
     "electron:dev": "concurrently -k -s first \"vite\" \"wait-on tcp:5173 && electron . http://127.0.0.1:5173\"",
     "electron:start": "electron .",
-    "electron:start:build": "pnpm build && electron ."
+    "electron:start:build": "pnpm build && electron .",
+    "electron:pack:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
+    "electron:dist:win": "pnpm build && electron-builder --win nsis --x64 --publish always",
+    "electron:dist:win:dry": "pnpm build && electron-builder --win nsis --x64 --publish never"
   },
   "dependencies": {
+    "electron-updater": "^6.3.9",
     "node-pty": "^1.0.0",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
@@ -27,6 +31,7 @@
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
     "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",

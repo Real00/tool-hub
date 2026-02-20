@@ -26,6 +26,28 @@ pnpm electron:dev
 pnpm build
 ```
 
+## Windows 打包与发布
+
+```bash
+pnpm electron:pack:win
+pnpm electron:dist:win:dry
+pnpm electron:dist:win
+```
+
+- `pnpm electron:pack:win`: 本地生成 Windows NSIS 安装包（x64，不发布）。
+- `pnpm electron:dist:win:dry`: 本地验证发布产物（含更新元数据，不发布）。
+- `pnpm electron:dist:win`: 发布到 GitHub Releases（需要 `GH_TOKEN`）。
+
+发布前请设置环境变量（PowerShell）：
+
+```powershell
+$env:GH_TOKEN = "<github-token>"
+$env:GH_OWNER = "<github-owner>"
+$env:GH_REPO = "<github-repo>"
+```
+
+配置文件在 `electron-builder.yml`，默认开启 NSIS 差分更新（blockmap）。
+
 ## 运行构建后的应用
 
 ```bash
@@ -159,6 +181,7 @@ src/
   - generator terminal: `getGeneratorProjectTerminal` `startGeneratorProjectTerminal` `sendGeneratorProjectTerminalInput` `stopGeneratorProjectTerminal` `resizeGeneratorProjectTerminal` `subscribeGeneratorProjectTerminal`
   - apps: `getAppsRoot` `listApps` `initializeAppsDatabase` `installAppFromDirectory` `startApp` `stopApp` `getAppLogs` `removeApp` `openAppWindow` `pickInstallDirectory`
   - system apps: `refreshSystemAppsIndex` `searchSystemApps` `openSystemApp`
+  - updates: `getUpdateState` `checkForUpdates` `downloadUpdate` `installUpdateAndRestart` `subscribeUpdateEvents`
   - quick launcher: `closeQuickLauncherWindow` `setQuickLauncherWindowSize` `subscribeQuickLauncherRequest`
 - IPC channels（main handlers/events）:
   - `tool-hub:ping`
@@ -168,4 +191,5 @@ src/
   - apps: `apps:get-root` `apps:list` `apps:initialize-db` `apps:install-from-directory` `apps:start` `apps:stop` `apps:get-logs` `apps:remove` `apps:open-window` `apps:pick-install-directory`
   - app runtime: `app-runtime:get-info` `app-runtime:launch-payload` `app-runtime:kv-get` `app-runtime:kv-set` `app-runtime:kv-delete` `app-runtime:kv-list` `app-runtime:kv-clear` `app-runtime:file-read` `app-runtime:file-write` `app-runtime:system-file-read` `app-runtime:system-file-write`
   - system apps: `system-apps:refresh` `system-apps:search` `system-apps:open`
+  - updates: `update:get-state` `update:check` `update:download` `update:install` `update:subscribe` `update:unsubscribe` `update:state`
   - quick launcher: `quick-launcher:open` `quick-launcher:close` `quick-launcher:set-size`

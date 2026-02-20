@@ -3,13 +3,18 @@ import { useGeneratorSession } from "./use-generator-session";
 import { defaultTabs } from "../config/settings";
 import type { AppsRootInfo, InstalledApp } from "../types/app";
 import type { TabDefinition } from "../types/settings";
+import type { UpdateState } from "../types/update";
 import {
   backupConfiguration,
+  checkForUpdates as checkForUpdatesBridge,
+  downloadUpdate as downloadUpdateBridge,
   getAppLogs,
   getAppsRoot,
   getSettingsTabs,
+  getUpdateState as getUpdateStateBridge,
   initializeAppsDatabase,
   initializeSettingsDatabase,
+  installUpdateAndRestart as installUpdateAndRestartBridge,
   installAppFromDirectory,
   isElectronRuntime,
   listApps,
@@ -22,6 +27,7 @@ import {
   saveSettingsTabs,
   startApp,
   stopApp,
+  subscribeUpdateEvents,
 } from "../platform/electron-bridge";
 
 function formatError(error: unknown): string {
@@ -81,6 +87,22 @@ function cloneTabs(input: TabDefinition[]): TabDefinition[] {
   return input.map((tab) => ({ ...tab }));
 }
 
+function createDisabledUpdateState(message: string): UpdateState {
+  return {
+    status: "disabled",
+    currentVersion: "-",
+    availableVersion: null,
+    downloadedVersion: null,
+    releaseName: null,
+    releaseDate: null,
+    releaseNotes: null,
+    lastCheckedAt: null,
+    downloadedAt: null,
+    progress: null,
+    message,
+  };
+}
+
 function createToolHubState() {
   const tabs = ref<TabDefinition[]>(defaultTabs.map((tab) => ({ ...tab })));
   const apps = ref<InstalledApp[]>([]);
@@ -98,6 +120,9 @@ function createToolHubState() {
   );
   const restoreStatus = ref<"idle" | "loading" | "success" | "error">("idle");
   const restoreMessage = ref("Restore supports backup ZIP created by Tool Hub.");
+  const updateState = ref<UpdateState>(
+    createDisabledUpdateState("Automatic updates are only available in Electron runtime."),
+  );
 
   const settingsStatus = ref<"idle" | "saving" | "success" | "error">("idle");
   const settingsMessage = ref("Edit tabs and save to local SQLite.");
@@ -118,6 +143,7 @@ function createToolHubState() {
   let appsPollingTimer: ReturnType<typeof setInterval> | null = null;
   let appsInitialLoadTimer: ReturnType<typeof setTimeout> | null = null;
   let bridgeAndTabsLoadTimer: ReturnType<typeof setTimeout> | null = null;
+  let detachUpdateSubscription: (() => void) | null = null;
   let initialized = false;
 
   const {
@@ -281,6 +307,109 @@ function createToolHubState() {
     } catch (error) {
       systemAppsStatus.value = "error";
       systemAppsMessage.value = `System app refresh failed: ${formatError(error)}`;
+    }
+  }
+
+  function applyUpdateState(next: UpdateState) {
+    updateState.value = {
+      ...next,
+      progress: next.progress ? { ...next.progress } : null,
+    };
+  }
+
+  async function loadUpdateState() {
+    if (!isElectronRuntime()) {
+      updateState.value = createDisabledUpdateState(
+        "Automatic updates are only available in Electron runtime.",
+      );
+      return;
+    }
+
+    try {
+      const nextState = await getUpdateStateBridge();
+      applyUpdateState(nextState);
+    } catch (error) {
+      updateState.value = {
+        ...updateState.value,
+        status: "error",
+        message: `Failed to load update state: ${formatError(error)}`,
+      };
+    }
+  }
+
+  async function checkForAppUpdates() {
+    if (!isElectronRuntime()) {
+      updateState.value = createDisabledUpdateState(
+        "Automatic updates are only available in Electron runtime.",
+      );
+      return;
+    }
+
+    try {
+      const nextState = await checkForUpdatesBridge();
+      applyUpdateState(nextState);
+    } catch (error) {
+      updateState.value = {
+        ...updateState.value,
+        status: "error",
+        message: `Update check failed: ${formatError(error)}`,
+      };
+    }
+  }
+
+  async function downloadAppUpdate() {
+    if (!isElectronRuntime()) {
+      updateState.value = createDisabledUpdateState(
+        "Automatic updates are only available in Electron runtime.",
+      );
+      return;
+    }
+
+    try {
+      const nextState = await downloadUpdateBridge();
+      applyUpdateState(nextState);
+    } catch (error) {
+      updateState.value = {
+        ...updateState.value,
+        status: "error",
+        message: `Update download failed: ${formatError(error)}`,
+      };
+    }
+  }
+
+  async function installAppUpdate() {
+    if (!isElectronRuntime()) {
+      updateState.value = createDisabledUpdateState(
+        "Automatic updates are only available in Electron runtime.",
+      );
+      return;
+    }
+    if (updateState.value.status !== "downloaded") {
+      updateState.value = {
+        ...updateState.value,
+        message: "No downloaded update is ready to install.",
+      };
+      return;
+    }
+    if (!window.confirm("Install downloaded update now and restart the app?")) {
+      return;
+    }
+
+    try {
+      const willInstall = await installUpdateAndRestartBridge();
+      if (!willInstall) {
+        updateState.value = {
+          ...updateState.value,
+          status: "error",
+          message: "Install request was rejected by updater state.",
+        };
+      }
+    } catch (error) {
+      updateState.value = {
+        ...updateState.value,
+        status: "error",
+        message: `Failed to install update: ${formatError(error)}`,
+      };
     }
   }
 
@@ -682,6 +811,18 @@ function createToolHubState() {
     initialized = true;
     runtimeLabel.value = isElectronRuntime() ? "Electron" : "Web";
 
+    if (isElectronRuntime()) {
+      detachUpdateSubscription?.();
+      detachUpdateSubscription = subscribeUpdateEvents((nextState) => {
+        applyUpdateState(nextState);
+      });
+      void loadUpdateState();
+    } else {
+      updateState.value = createDisabledUpdateState(
+        "Automatic updates are only available in Electron runtime.",
+      );
+    }
+
     bridgeAndTabsLoadTimer = setTimeout(() => {
       void loadTabsFromStorage();
       void testElectronBridge();
@@ -710,6 +851,8 @@ function createToolHubState() {
       clearInterval(appsPollingTimer);
       appsPollingTimer = null;
     }
+    detachUpdateSubscription?.();
+    detachUpdateSubscription = null;
     detachGeneratorTerminalSubscription();
   }
 
@@ -730,6 +873,7 @@ function createToolHubState() {
     backupStatus,
     bridgeMessage,
     bridgeStatus,
+    checkForAppUpdates,
     systemAppsMessage,
     systemAppsStatus,
     chooseInstallDirectory,
@@ -755,6 +899,7 @@ function createToolHubState() {
     initializeAppsDb,
     initializeSettingsDb,
     installAppFromGeneratorProject,
+    installAppUpdate,
     installNodeApp,
     installSourceDir,
     installTabId,
@@ -777,6 +922,7 @@ function createToolHubState() {
     restoreMessage,
     restoreStatus,
     runtimeLabel,
+    loadUpdateState,
     refreshSystemAppsData,
     resizeEmbeddedTerminal,
     saveClaudePathConfig,
@@ -790,10 +936,12 @@ function createToolHubState() {
     detachGeneratorTerminalSubscription,
     stopEmbeddedTerminal,
     stopNodeApp,
+    downloadAppUpdate,
     tabDraft,
     tabs,
     testElectronBridge,
     toggleOverview,
+    updateState,
   };
 }
 

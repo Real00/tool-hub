@@ -19,6 +19,8 @@ let appsManagerModule = null;
 let settingsStoreModule = null;
 let appGeneratorModule = null;
 let systemAppsManagerModule = null;
+let autoUpdaterInstance = null;
+let autoUpdaterLoadAttempted = false;
 let isConfigRestoreInProgress = false;
 
 function assertRestoreAccessAllowed(options = {}) {
@@ -69,6 +71,8 @@ const APP_NAME = "Tool Hub";
 const bootTraceEnabled = process.env.TOOL_HUB_BOOT_LOG === "1";
 const bootStartAt = Date.now();
 const APP_RUNTIME_LAUNCH_PAYLOAD_CHANNEL = "app-runtime:launch-payload";
+const AUTO_UPDATE_EVENT_CHANNEL = "update:state";
+const AUTO_UPDATE_STARTUP_DELAY_MS = 15000;
 const QUICK_LAUNCHER_SIZE_COMPACT = "compact";
 const QUICK_LAUNCHER_SIZE_EXPANDED = "expanded";
 
@@ -87,10 +91,369 @@ let isClosePromptVisible = false;
 const appWindows = new Map();
 const runtimeWindowStateByWebContentsId = new Map();
 const terminalSubscriptions = new Map();
+const autoUpdateSubscribers = new Set();
 let appIcon = null;
+let autoUpdateInitialized = false;
+let autoUpdateStartupTimer = null;
+let autoUpdateCheckInFlight = false;
+let autoUpdateDownloadInFlight = false;
 
 const ASSETS_DIR = path.join(__dirname, "assets");
 const APP_ICON_CANDIDATES = ["tray-icon.ico", "tray-icon.png", "tray-icon.svg"];
+
+function buildInitialAutoUpdateState() {
+  if (process.platform !== "win32") {
+    return {
+      status: "disabled",
+      currentVersion: app.getVersion(),
+      availableVersion: null,
+      downloadedVersion: null,
+      releaseName: null,
+      releaseDate: null,
+      releaseNotes: null,
+      lastCheckedAt: null,
+      downloadedAt: null,
+      progress: null,
+      message: "Automatic updates are enabled for Windows builds only.",
+    };
+  }
+  if (isDev) {
+    return {
+      status: "disabled",
+      currentVersion: app.getVersion(),
+      availableVersion: null,
+      downloadedVersion: null,
+      releaseName: null,
+      releaseDate: null,
+      releaseNotes: null,
+      lastCheckedAt: null,
+      downloadedAt: null,
+      progress: null,
+      message: "Automatic updates are disabled in development mode.",
+    };
+  }
+  return {
+    status: "idle",
+    currentVersion: app.getVersion(),
+    availableVersion: null,
+    downloadedVersion: null,
+    releaseName: null,
+    releaseDate: null,
+    releaseNotes: null,
+    lastCheckedAt: null,
+    downloadedAt: null,
+    progress: null,
+    message: "Waiting for update check.",
+  };
+}
+
+let autoUpdateState = buildInitialAutoUpdateState();
+
+function getAutoUpdater() {
+  if (autoUpdaterLoadAttempted) {
+    return autoUpdaterInstance;
+  }
+  autoUpdaterLoadAttempted = true;
+
+  if (process.platform !== "win32" || isDev) {
+    autoUpdaterInstance = null;
+    return autoUpdaterInstance;
+  }
+
+  try {
+    const { autoUpdater } = require("electron-updater");
+    autoUpdaterInstance = autoUpdater;
+    return autoUpdaterInstance;
+  } catch (error) {
+    autoUpdaterInstance = null;
+    console.warn(
+      "electron-updater is unavailable. Update checks will be disabled.",
+      error,
+    );
+    return autoUpdaterInstance;
+  }
+}
+
+function formatUpdateError(error) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function normalizeReleaseNotes(value) {
+  if (!value) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const notes = value
+      .map((item) => {
+        if (typeof item === "string") {
+          return item.trim();
+        }
+        if (item && typeof item.note === "string") {
+          return item.note.trim();
+        }
+        return "";
+      })
+      .filter(Boolean);
+    return notes.length > 0 ? notes.join("\n\n") : null;
+  }
+  return null;
+}
+
+function formatReleaseDate(value) {
+  if (!value) {
+    return null;
+  }
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+  return new Date(timestamp).toISOString();
+}
+
+function cloneAutoUpdateState() {
+  return {
+    ...autoUpdateState,
+    progress: autoUpdateState.progress ? { ...autoUpdateState.progress } : null,
+  };
+}
+
+function emitAutoUpdateState() {
+  const payload = cloneAutoUpdateState();
+  for (const webContents of autoUpdateSubscribers) {
+    if (!webContents || webContents.isDestroyed()) {
+      autoUpdateSubscribers.delete(webContents);
+      continue;
+    }
+    webContents.send(AUTO_UPDATE_EVENT_CHANNEL, payload);
+  }
+}
+
+function patchAutoUpdateState(partial) {
+  autoUpdateState = {
+    ...autoUpdateState,
+    ...partial,
+    currentVersion: app.getVersion(),
+  };
+  emitAutoUpdateState();
+}
+
+function ensureAutoUpdateDisabledState(message) {
+  patchAutoUpdateState({
+    status: "disabled",
+    message,
+    progress: null,
+  });
+  return cloneAutoUpdateState();
+}
+
+async function checkForAppUpdates(trigger = "manual") {
+  const updater = getAutoUpdater();
+  if (!updater) {
+    if (process.platform !== "win32") {
+      return ensureAutoUpdateDisabledState(
+        "Automatic updates are enabled for Windows builds only.",
+      );
+    }
+    if (isDev) {
+      return ensureAutoUpdateDisabledState(
+        "Automatic updates are disabled in development mode.",
+      );
+    }
+    return ensureAutoUpdateDisabledState(
+      "electron-updater is unavailable in current runtime.",
+    );
+  }
+
+  if (autoUpdateCheckInFlight) {
+    return cloneAutoUpdateState();
+  }
+  autoUpdateCheckInFlight = true;
+  if (trigger === "manual") {
+    patchAutoUpdateState({
+      status: "checking",
+      message: "Checking for updates...",
+      lastCheckedAt: new Date().toISOString(),
+      progress: null,
+    });
+  }
+
+  try {
+    await updater.checkForUpdates();
+  } catch (error) {
+    patchAutoUpdateState({
+      status: "error",
+      message: `Update check failed: ${formatUpdateError(error)}`,
+      progress: null,
+    });
+  } finally {
+    autoUpdateCheckInFlight = false;
+  }
+
+  return cloneAutoUpdateState();
+}
+
+async function downloadAppUpdate() {
+  const updater = getAutoUpdater();
+  if (!updater) {
+    return ensureAutoUpdateDisabledState(
+      "Automatic updates are unavailable in current runtime.",
+    );
+  }
+  if (autoUpdateState.status === "downloaded") {
+    return cloneAutoUpdateState();
+  }
+  if (autoUpdateDownloadInFlight) {
+    return cloneAutoUpdateState();
+  }
+
+  autoUpdateDownloadInFlight = true;
+  patchAutoUpdateState({
+    status: "downloading",
+    message: "Downloading update package...",
+    progress: null,
+  });
+
+  try {
+    await updater.downloadUpdate();
+  } catch (error) {
+    patchAutoUpdateState({
+      status: "error",
+      message: `Update download failed: ${formatUpdateError(error)}`,
+      progress: null,
+    });
+  } finally {
+    autoUpdateDownloadInFlight = false;
+  }
+
+  return cloneAutoUpdateState();
+}
+
+function installAppUpdateAndRestart() {
+  const updater = getAutoUpdater();
+  if (!updater || autoUpdateState.status !== "downloaded") {
+    return false;
+  }
+  isQuitting = true;
+  setImmediate(() => {
+    updater.quitAndInstall(false, true);
+  });
+  return true;
+}
+
+function initializeAutoUpdater() {
+  if (autoUpdateInitialized) {
+    return;
+  }
+  autoUpdateInitialized = true;
+
+  const updater = getAutoUpdater();
+  if (!updater) {
+    ensureAutoUpdateDisabledState(
+      process.platform !== "win32"
+        ? "Automatic updates are enabled for Windows builds only."
+        : isDev
+          ? "Automatic updates are disabled in development mode."
+          : "electron-updater is unavailable in current runtime.",
+    );
+    return;
+  }
+
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.allowPrerelease = false;
+  updater.allowDowngrade = false;
+
+  updater.on("checking-for-update", () => {
+    patchAutoUpdateState({
+      status: "checking",
+      message: "Checking for updates...",
+      lastCheckedAt: new Date().toISOString(),
+      progress: null,
+    });
+  });
+
+  updater.on("update-available", (info) => {
+    const nextVersion =
+      info && typeof info.version === "string" ? info.version : null;
+    patchAutoUpdateState({
+      status: "available",
+      availableVersion: nextVersion,
+      downloadedVersion: null,
+      downloadedAt: null,
+      releaseName:
+        info && typeof info.releaseName === "string" ? info.releaseName : null,
+      releaseDate: formatReleaseDate(info?.releaseDate),
+      releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+      message: nextVersion
+        ? `Update ${nextVersion} available. Downloading in background...`
+        : "Update available. Downloading in background...",
+      progress: null,
+    });
+  });
+
+  updater.on("update-not-available", () => {
+    patchAutoUpdateState({
+      status: "up-to-date",
+      availableVersion: null,
+      downloadedVersion: null,
+      downloadedAt: null,
+      releaseName: null,
+      releaseDate: null,
+      releaseNotes: null,
+      message: "You are already on the latest version.",
+      progress: null,
+    });
+  });
+
+  updater.on("download-progress", (progress) => {
+    const nextProgress = {
+      percent: Number(progress?.percent ?? 0),
+      transferred: Number(progress?.transferred ?? 0),
+      total: Number(progress?.total ?? 0),
+      bytesPerSecond: Number(progress?.bytesPerSecond ?? 0),
+    };
+    patchAutoUpdateState({
+      status: "downloading",
+      message: `Downloading update: ${nextProgress.percent.toFixed(1)}%`,
+      progress: nextProgress,
+    });
+  });
+
+  updater.on("update-downloaded", (info) => {
+    const nextVersion =
+      info && typeof info.version === "string" ? info.version : null;
+    patchAutoUpdateState({
+      status: "downloaded",
+      availableVersion: nextVersion,
+      downloadedVersion: nextVersion,
+      downloadedAt: new Date().toISOString(),
+      releaseName:
+        info && typeof info.releaseName === "string" ? info.releaseName : null,
+      releaseDate: formatReleaseDate(info?.releaseDate),
+      releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+      message: nextVersion
+        ? `Update ${nextVersion} downloaded. Restart to install.`
+        : "Update downloaded. Restart to install.",
+      progress: null,
+    });
+  });
+
+  updater.on("error", (error) => {
+    autoUpdateCheckInFlight = false;
+    autoUpdateDownloadInFlight = false;
+    patchAutoUpdateState({
+      status: "error",
+      message: `Updater error: ${formatUpdateError(error)}`,
+      progress: null,
+    });
+  });
+}
 
 function resolveRendererEntryUrl(hashPath = "/workspace") {
   const normalizedHash = hashPath.startsWith("/") ? hashPath : `/${hashPath}`;
@@ -1550,12 +1913,42 @@ ipcMain.handle("quick-launcher:set-size", async (_event, mode) => {
   return true;
 });
 
+ipcMain.handle("update:get-state", async () => {
+  return cloneAutoUpdateState();
+});
+
+ipcMain.handle("update:check", async () => {
+  return checkForAppUpdates("manual");
+});
+
+ipcMain.handle("update:download", async () => {
+  return downloadAppUpdate();
+});
+
+ipcMain.handle("update:install", async () => {
+  return installAppUpdateAndRestart();
+});
+
+ipcMain.on("update:subscribe", (event) => {
+  const webContents = event.sender;
+  autoUpdateSubscribers.add(webContents);
+  webContents.once("destroyed", () => {
+    autoUpdateSubscribers.delete(webContents);
+  });
+  webContents.send(AUTO_UPDATE_EVENT_CHANNEL, cloneAutoUpdateState());
+});
+
+ipcMain.on("update:unsubscribe", (event) => {
+  autoUpdateSubscribers.delete(event.sender);
+});
+
 app.whenReady().then(() => {
   bootTrace("app.whenReady");
   Menu.setApplicationMenu(null);
   createMainWindow();
   createTray();
   registerQuickLauncherHotkey();
+  initializeAutoUpdater();
 
   const bootAppsManager = () => {
     void getAppsManager()
@@ -1576,14 +1969,32 @@ app.whenReady().then(() => {
     mainWindow.webContents.once("did-finish-load", () => {
       setTimeout(bootAppsManager, 300);
       setTimeout(bootSystemAppsIndex, 600);
+      if (autoUpdateStartupTimer) {
+        clearTimeout(autoUpdateStartupTimer);
+      }
+      autoUpdateStartupTimer = setTimeout(() => {
+        void checkForAppUpdates("startup");
+      }, AUTO_UPDATE_STARTUP_DELAY_MS);
     });
     mainWindow.webContents.once("did-fail-load", () => {
       setTimeout(bootAppsManager, 300);
       setTimeout(bootSystemAppsIndex, 600);
+      if (autoUpdateStartupTimer) {
+        clearTimeout(autoUpdateStartupTimer);
+      }
+      autoUpdateStartupTimer = setTimeout(() => {
+        void checkForAppUpdates("startup");
+      }, AUTO_UPDATE_STARTUP_DELAY_MS);
     });
   } else {
     setTimeout(bootAppsManager, 800);
     setTimeout(bootSystemAppsIndex, 1200);
+    if (autoUpdateStartupTimer) {
+      clearTimeout(autoUpdateStartupTimer);
+    }
+    autoUpdateStartupTimer = setTimeout(() => {
+      void checkForAppUpdates("startup");
+    }, AUTO_UPDATE_STARTUP_DELAY_MS);
   }
 
   app.on("activate", () => {
@@ -1595,6 +2006,10 @@ app.whenReady().then(() => {
 app.on("before-quit", () => {
   isQuitting = true;
   closeQuickLauncherWindow();
+  if (autoUpdateStartupTimer) {
+    clearTimeout(autoUpdateStartupTimer);
+    autoUpdateStartupTimer = null;
+  }
 });
 
 app.on("will-quit", () => {

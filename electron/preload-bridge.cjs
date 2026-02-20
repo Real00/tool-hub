@@ -119,6 +119,32 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   setQuickLauncherWindowSize(payload) {
     return ipcRenderer.invoke("quick-launcher:set-size", payload);
   },
+  getUpdateState() {
+    return ipcRenderer.invoke("update:get-state");
+  },
+  checkForUpdates() {
+    return ipcRenderer.invoke("update:check");
+  },
+  downloadUpdate() {
+    return ipcRenderer.invoke("update:download");
+  },
+  installUpdateAndRestart() {
+    return ipcRenderer.invoke("update:install");
+  },
+  subscribeUpdateEvents(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const listener = (_event, payload) => {
+      callback(payload);
+    };
+    ipcRenderer.on("update:state", listener);
+    ipcRenderer.send("update:subscribe");
+    return () => {
+      ipcRenderer.send("update:unsubscribe");
+      ipcRenderer.removeListener("update:state", listener);
+    };
+  },
   subscribeQuickLauncherRequest(callback) {
     if (typeof callback !== "function") {
       return () => {};

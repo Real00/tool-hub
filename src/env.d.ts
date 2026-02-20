@@ -16,6 +16,7 @@ import type {
   TabDefinition,
 } from "./types/settings";
 import type { SystemAppEntry } from "./types/system-app";
+import type { UpdateState } from "./types/update";
 
 declare global {
   interface ToolHubApi {
@@ -82,6 +83,11 @@ declare global {
       showPayloadHint?: boolean;
       contentHeight?: number;
     }) => Promise<boolean>;
+    getUpdateState: () => Promise<UpdateState>;
+    checkForUpdates: () => Promise<UpdateState>;
+    downloadUpdate: () => Promise<UpdateState>;
+    installUpdateAndRestart: () => Promise<boolean>;
+    subscribeUpdateEvents: (callback: (state: UpdateState) => void) => () => void;
     subscribeQuickLauncherRequest: (callback: () => void) => () => void;
   }
 
