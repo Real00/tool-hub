@@ -198,3 +198,17 @@ src/
   - system apps: `system-apps:refresh` `system-apps:search` `system-apps:open`
   - updates: `update:get-state` `update:check` `update:download` `update:install` `update:subscribe` `update:unsubscribe` `update:state`
   - quick launcher: `quick-launcher:open` `quick-launcher:close` `quick-launcher:set-size`
+
+## License
+
+This repository is source-available under `PolyForm Noncommercial License 1.0.0`.
+
+- You can use, modify, and redistribute this project for noncommercial purposes.
+- Commercial use is not allowed without a separate commercial license from the copyright holder.
+- Full license text: `LICENSE`
+
+This is not an OSI open source license because commercial use is restricted.
+
+## Commercial Use
+
+For commercial use, please contact the repository owner.

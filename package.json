@@ -2,6 +2,7 @@
   "name": "tool-hub",
   "private": true,
   "version": "0.1.2",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "main": "electron/main-process.cjs",
   "scripts": {
