@@ -2,6 +2,10 @@
 
 桌面工具集应用，使用 Vue 3 + Tailwind CSS 构建。
 
+## Changelog
+
+- 本次发布变更见 `CHANGELOG.md`（当前版本：`0.1.2`）。
+
 ## Start
 
 ```bash
@@ -47,6 +51,7 @@ $env:GH_REPO = "<github-repo>"
 ```
 
 配置文件在 `electron-builder.yml`，默认开启 NSIS 差分更新（blockmap）。
+发布专用配置在 `electron-builder.publish.yml`（读取 `GH_OWNER`、`GH_REPO`）。
 
 ## 运行构建后的应用
 

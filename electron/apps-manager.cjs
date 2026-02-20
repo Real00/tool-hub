@@ -1,8 +1,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { pathToFileURL } = require("node:url");
 const { spawn } = require("node:child_process");
-const { app } = require("electron");
+const { pathToFileURL } = require("node:url");
+const { app, utilityProcess } = require("electron");
 const { open } = require("sqlite");
 const sqlite3 = require("sqlite3");
 
@@ -14,6 +14,8 @@ const LIST_ROWS_CACHE_TTL_MS = 1200;
 const SCAN_REFRESH_INTERVAL_MS = 5000;
 const APP_KV_MAX_KEY_LENGTH = 256;
 const APP_FILE_READ_MAX_BYTES = 500000;
+const STOP_APP_WAIT_TIMEOUT_MS = 1200;
+const STOP_APP_FORCE_WAIT_TIMEOUT_MS = 800;
 
 let dbPromise = null;
 
@@ -858,6 +860,17 @@ async function insertRun(appId, pid) {
   });
 }
 
+async function updateRunPid(runId, pid) {
+  return runSerializedWrite(async () => {
+    const db = await getDb();
+    await db.run(
+      "UPDATE app_runs SET pid = ? WHERE run_id = ?",
+      Number.isInteger(pid) ? pid : null,
+      runId,
+    );
+  });
+}
+
 async function finishRun(runId, exitCode) {
   return runSerializedWrite(async () => {
     const db = await getDb();
@@ -895,35 +908,152 @@ async function startApp(appId) {
     }
   })();
 
-  const child = spawn(process.execPath, ["--run-as-node", entryAbs], {
-    cwd: record.app_dir,
-    env: { ...process.env, ...envFromManifest },
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let child;
+  try {
+    child = utilityProcess.fork(entryAbs, [], {
+      cwd: record.app_dir,
+      env: { ...process.env, ...envFromManifest },
+      stdio: ["ignore", "pipe", "pipe"],
+      serviceName: `tool-hub-app-${record.id}`,
+    });
+  } catch (error) {
+    throw new Error(
+      `Failed to start app runtime for "${record.id}": ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const missingPipes = [];
+  if (!child.stdout) {
+    missingPipes.push("stdout");
+  }
+  if (!child.stderr) {
+    missingPipes.push("stderr");
+  }
+  if (missingPipes.length > 0) {
+    const reason = `[runtime:stdio] Missing pipe(s): ${missingPipes.join(", ")}`;
+    appendLog(appId, "stderr", reason);
+    try {
+      child.kill();
+    } catch {
+      // Ignore kill failures for partially started process.
+    }
+    throw new Error(
+      `Failed to start app runtime for "${record.id}": ${reason}`,
+    );
+  }
 
   const runId = await insertRun(appId, child.pid ?? null);
-  runningApps.set(appId, { child, pid: child.pid ?? null, runId });
+  const runtime = { child, pid: child.pid ?? null, runId };
+  runningApps.set(appId, runtime);
   appLogs.set(appId, []);
 
+  child.on("spawn", () => {
+    if (!runningApps.has(appId)) {
+      return;
+    }
+    runtime.pid = child.pid ?? null;
+    appendLog(
+      appId,
+      "system",
+      `[runtime] spawned pid=${runtime.pid ?? "unknown"}`,
+    );
+    if (Number.isInteger(runtime.pid)) {
+      void updateRunPid(runId, runtime.pid);
+    }
+  });
   child.stdout?.on("data", (chunk) => appendLog(appId, "stdout", chunk));
   child.stderr?.on("data", (chunk) => appendLog(appId, "stderr", chunk));
   child.on("exit", (code) => {
     void finishRun(runId, code);
     runningApps.delete(appId);
   });
-  child.on("error", (error) => {
-    appendLog(appId, "stderr", error.message);
+  child.on("error", (type, location) => {
+    appendLog(appId, "stderr", `[runtime:${type}] ${location}`);
   });
 
   return listApps();
 }
 
+function waitForChildExit(child, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+
+    const finish = (didExit) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      child.removeListener("exit", onExit);
+      resolve(didExit);
+    };
+
+    const onExit = () => finish(true);
+
+    child.once("exit", onExit);
+    timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+function forceKillProcessTree(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return Promise.resolve(false);
+  }
+
+  if (process.platform !== "win32") {
+    try {
+      process.kill(pid, "SIGKILL");
+      return Promise.resolve(true);
+    } catch {
+      return Promise.resolve(false);
+    }
+  }
+
+  return new Promise((resolve) => {
+    const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    killer.once("error", () => resolve(false));
+    killer.once("close", (code) => resolve(code === 0));
+  });
+}
+
 async function stopApp(appId) {
   const runtime = runningApps.get(appId);
-  if (runtime) {
-    runtime.child.kill();
+  if (!runtime) {
+    return listApps();
   }
+
+  const child = runtime.child;
+  const pid = Number.isInteger(runtime.pid) ? runtime.pid : child.pid;
+
+  appendLog(appId, "system", "[runtime] stop requested");
+  try {
+    child.kill();
+  } catch (error) {
+    appendLog(
+      appId,
+      "stderr",
+      `[runtime] stop signal failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const exitedInTime = await waitForChildExit(child, STOP_APP_WAIT_TIMEOUT_MS);
+  if (!exitedInTime && Number.isInteger(pid)) {
+    appendLog(appId, "system", `[runtime] stop timeout, forcing pid=${pid}`);
+    await forceKillProcessTree(pid);
+    await waitForChildExit(child, STOP_APP_FORCE_WAIT_TIMEOUT_MS);
+  }
+
+  if (runningApps.get(appId) === runtime) {
+    runningApps.delete(appId);
+  }
+
   return listApps();
 }
 

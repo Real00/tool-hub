@@ -68,6 +68,7 @@ function getSystemAppsManager() {
 const devServerUrl = process.argv[2];
 const isDev = Boolean(devServerUrl);
 const APP_NAME = "Tool Hub";
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const bootTraceEnabled = process.env.TOOL_HUB_BOOT_LOG === "1";
 const bootStartAt = Date.now();
 const APP_RUNTIME_LAUNCH_PAYLOAD_CHANNEL = "app-runtime:launch-payload";
@@ -98,8 +99,17 @@ let autoUpdateStartupTimer = null;
 let autoUpdateCheckInFlight = false;
 let autoUpdateDownloadInFlight = false;
 
-const ASSETS_DIR = path.join(__dirname, "assets");
-const APP_ICON_CANDIDATES = ["tray-icon.ico", "tray-icon.png", "tray-icon.svg"];
+const ASSETS_DIR_CANDIDATES = [
+  path.join(process.resourcesPath, "assets"),
+  path.join(__dirname, "assets"),
+];
+const APP_ICON_CANDIDATES = [
+  "app-icon.ico",
+  "app-icon.png",
+  "tray-icon.ico",
+  "tray-icon.png",
+  "tray-icon.svg",
+];
 
 function buildInitialAutoUpdateState() {
   if (process.platform !== "win32") {
@@ -514,12 +524,14 @@ function getAppIcon() {
     return appIcon;
   }
 
-  for (const fileName of APP_ICON_CANDIDATES) {
-    const iconPath = path.join(ASSETS_DIR, fileName);
-    const image = loadIconImage(iconPath);
-    if (image) {
-      appIcon = image;
-      return appIcon;
+  for (const assetsDir of ASSETS_DIR_CANDIDATES) {
+    for (const fileName of APP_ICON_CANDIDATES) {
+      const iconPath = path.join(assetsDir, fileName);
+      const image = loadIconImage(iconPath);
+      if (image) {
+        appIcon = image;
+        return appIcon;
+      }
     }
   }
 
@@ -1799,6 +1811,7 @@ ipcMain.handle("apps:start", async (_event, appId) => {
 });
 
 ipcMain.handle("apps:stop", async (_event, appId) => {
+  closeAppWindowById(appId);
   return getAppsManager().stopApp(appId);
 });
 
@@ -1942,82 +1955,98 @@ ipcMain.on("update:unsubscribe", (event) => {
   autoUpdateSubscribers.delete(event.sender);
 });
 
-app.whenReady().then(() => {
-  bootTrace("app.whenReady");
-  Menu.setApplicationMenu(null);
-  createMainWindow();
-  createTray();
-  registerQuickLauncherHotkey();
-  initializeAutoUpdater();
-
-  const bootAppsManager = () => {
-    void getAppsManager()
-      .initializeAppsManager()
-      .catch((error) => {
-        console.error("Apps manager init failed:", error);
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!app.isReady()) {
+      app.once("ready", () => {
+        showMainWindow();
+        updateTrayMenu();
       });
-  };
-  const bootSystemAppsIndex = () => {
-    void getSystemAppsManager()
-      .refreshSystemAppsIndex()
-      .catch((error) => {
-        console.warn("System apps index init failed:", error);
-      });
-  };
-
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.once("did-finish-load", () => {
-      setTimeout(bootAppsManager, 300);
-      setTimeout(bootSystemAppsIndex, 600);
-      if (autoUpdateStartupTimer) {
-        clearTimeout(autoUpdateStartupTimer);
-      }
-      autoUpdateStartupTimer = setTimeout(() => {
-        void checkForAppUpdates("startup");
-      }, AUTO_UPDATE_STARTUP_DELAY_MS);
-    });
-    mainWindow.webContents.once("did-fail-load", () => {
-      setTimeout(bootAppsManager, 300);
-      setTimeout(bootSystemAppsIndex, 600);
-      if (autoUpdateStartupTimer) {
-        clearTimeout(autoUpdateStartupTimer);
-      }
-      autoUpdateStartupTimer = setTimeout(() => {
-        void checkForAppUpdates("startup");
-      }, AUTO_UPDATE_STARTUP_DELAY_MS);
-    });
-  } else {
-    setTimeout(bootAppsManager, 800);
-    setTimeout(bootSystemAppsIndex, 1200);
-    if (autoUpdateStartupTimer) {
-      clearTimeout(autoUpdateStartupTimer);
+      return;
     }
-    autoUpdateStartupTimer = setTimeout(() => {
-      void checkForAppUpdates("startup");
-    }, AUTO_UPDATE_STARTUP_DELAY_MS);
-  }
-
-  app.on("activate", () => {
     showMainWindow();
     updateTrayMenu();
   });
-});
 
-app.on("before-quit", () => {
-  isQuitting = true;
-  closeQuickLauncherWindow();
-  if (autoUpdateStartupTimer) {
-    clearTimeout(autoUpdateStartupTimer);
-    autoUpdateStartupTimer = null;
-  }
-});
+  app.whenReady().then(() => {
+    bootTrace("app.whenReady");
+    Menu.setApplicationMenu(null);
+    createMainWindow();
+    createTray();
+    registerQuickLauncherHotkey();
+    initializeAutoUpdater();
 
-app.on("will-quit", () => {
-  globalShortcut.unregisterAll();
-});
+    const bootAppsManager = () => {
+      void getAppsManager()
+        .initializeAppsManager()
+        .catch((error) => {
+          console.error("Apps manager init failed:", error);
+        });
+    };
+    const bootSystemAppsIndex = () => {
+      void getSystemAppsManager()
+        .refreshSystemAppsIndex()
+        .catch((error) => {
+          console.warn("System apps index init failed:", error);
+        });
+    };
 
-app.on("window-all-closed", () => {
-  if (process.platform === "darwin" && !isQuitting) {
-    return;
-  }
-});
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.once("did-finish-load", () => {
+        setTimeout(bootAppsManager, 300);
+        setTimeout(bootSystemAppsIndex, 600);
+        if (autoUpdateStartupTimer) {
+          clearTimeout(autoUpdateStartupTimer);
+        }
+        autoUpdateStartupTimer = setTimeout(() => {
+          void checkForAppUpdates("startup");
+        }, AUTO_UPDATE_STARTUP_DELAY_MS);
+      });
+      mainWindow.webContents.once("did-fail-load", () => {
+        setTimeout(bootAppsManager, 300);
+        setTimeout(bootSystemAppsIndex, 600);
+        if (autoUpdateStartupTimer) {
+          clearTimeout(autoUpdateStartupTimer);
+        }
+        autoUpdateStartupTimer = setTimeout(() => {
+          void checkForAppUpdates("startup");
+        }, AUTO_UPDATE_STARTUP_DELAY_MS);
+      });
+    } else {
+      setTimeout(bootAppsManager, 800);
+      setTimeout(bootSystemAppsIndex, 1200);
+      if (autoUpdateStartupTimer) {
+        clearTimeout(autoUpdateStartupTimer);
+      }
+      autoUpdateStartupTimer = setTimeout(() => {
+        void checkForAppUpdates("startup");
+      }, AUTO_UPDATE_STARTUP_DELAY_MS);
+    }
+
+    app.on("activate", () => {
+      showMainWindow();
+      updateTrayMenu();
+    });
+  });
+
+  app.on("before-quit", () => {
+    isQuitting = true;
+    closeQuickLauncherWindow();
+    if (autoUpdateStartupTimer) {
+      clearTimeout(autoUpdateStartupTimer);
+      autoUpdateStartupTimer = null;
+    }
+  });
+
+  app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
+  });
+
+  app.on("window-all-closed", () => {
+    if (process.platform === "darwin" && !isQuitting) {
+      return;
+    }
+  });
+}

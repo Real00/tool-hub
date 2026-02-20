@@ -3,7 +3,8 @@ import vue from "@vitejs/plugin-vue";
 
 const devHost = "127.0.0.1";
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: command === "build" ? "./" : "/",
   plugins: [vue()],
   optimizeDeps: {
     include: ["vue"],
@@ -32,4 +33,4 @@ export default defineConfig({
     minify: "esbuild",
     sourcemap: false,
   },
-});
+}));

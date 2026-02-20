@@ -13,18 +13,22 @@ files:
 asar: true
 compression: normal
 generateUpdatesFilesForAllChannels: true
+extraResources:
+  - from: electron/assets
+    to: assets
+    filter:
+      - "**/*"
 win:
+  icon: electron/assets/app-icon.ico
   target:
     - target: nsis
       arch:
         - x64
 nsis:
+  installerIcon: electron/assets/app-icon.ico
+  uninstallerIcon: electron/assets/app-icon.ico
+  installerHeaderIcon: electron/assets/app-icon.ico
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: false
   differentialPackage: true
-publish:
-  - provider: github
-    owner: "${env.GH_OWNER}"
-    repo: "${env.GH_REPO}"
-    releaseType: release

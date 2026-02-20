@@ -1,7 +1,7 @@
 {
   "name": "tool-hub",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "main": "electron/main-process.cjs",
   "scripts": {
@@ -12,9 +12,9 @@
     "electron:dev": "concurrently -k -s first \"vite\" \"wait-on tcp:5173 && electron . http://127.0.0.1:5173\"",
     "electron:start": "electron .",
     "electron:start:build": "pnpm build && electron .",
-    "electron:pack:win": "pnpm build && electron-builder --win nsis --x64 --publish never",
-    "electron:dist:win": "pnpm build && electron-builder --win nsis --x64 --publish always",
-    "electron:dist:win:dry": "pnpm build && electron-builder --win nsis --x64 --publish never"
+    "electron:pack:win": "pnpm build && electron-builder --config electron-builder.yml --win nsis --x64 --publish never",
+    "electron:dist:win": "pnpm build && electron-builder --config electron-builder.publish.yml --win nsis --x64 --publish always",
+    "electron:dist:win:dry": "pnpm build && electron-builder --config electron-builder.yml --win nsis --x64 --publish never"
   },
   "dependencies": {
     "electron-updater": "^6.3.9",
