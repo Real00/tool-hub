@@ -42,6 +42,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron",
+      "esbuild",
       "node-pty",
       "sqlite3"
     ]
