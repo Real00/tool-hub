@@ -11,7 +11,11 @@ import type {
   GeneratorSettings,
   GeneratorTerminalState,
 } from "./types/generator";
-import type { TabDefinition } from "./types/settings";
+import type {
+  ConfigBackupResult,
+  ConfigRestoreResult,
+  TabDefinition,
+} from "./types/settings";
 import type { SystemAppEntry } from "./types/system-app";
 
 declare global {
@@ -20,6 +24,8 @@ declare global {
     getSettingsTabs: () => Promise<TabDefinition[]>;
     saveSettingsTabs: (tabs: TabDefinition[]) => Promise<TabDefinition[]>;
     initializeSettingsDatabase: () => Promise<TabDefinition[]>;
+    backupConfiguration: () => Promise<ConfigBackupResult>;
+    restoreConfigurationFromArchive: () => Promise<ConfigRestoreResult>;
     getGeneratorSettings: () => Promise<GeneratorSettings>;
     saveGeneratorSettings: (input: GeneratorSettings) => Promise<GeneratorSettings>;
     detectClaudeCli: () => Promise<ClaudeCliDetectionResult>;

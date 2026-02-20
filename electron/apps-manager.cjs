@@ -1053,8 +1053,42 @@ async function initializeAppsManager() {
   await getDb();
 }
 
+async function closeAppsManager() {
+  for (const runtime of runningApps.values()) {
+    try {
+      runtime.child.kill();
+    } catch {
+      // Ignore process termination errors during shutdown.
+    }
+  }
+  runningApps.clear();
+  appLogs.clear();
+  manifestCacheByFolder.clear();
+  scanInFlight = null;
+  hasCompletedInitialScan = false;
+  lastScanAt = 0;
+  invalidateAppsRowsCache();
+
+  await Promise.race([
+    writeQueue.catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, 1500)),
+  ]);
+  writeQueue = Promise.resolve();
+
+  if (!dbPromise) {
+    return false;
+  }
+
+  const activePromise = dbPromise;
+  dbPromise = null;
+  const db = await activePromise;
+  await db.close();
+  return true;
+}
+
 module.exports = {
   clearAppStorage,
+  closeAppsManager,
   deleteAppStorageKey,
   getAppById,
   getAppLogs,

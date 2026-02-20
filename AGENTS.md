@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This project is an Electron + Vue 3 desktop UI.
+This project is a desktop application built with Vue 3.
 
 - `src/app/`: app shell and top-level page composition.
 - `src/components/`: reusable Vue components (`PascalCase.vue`).
@@ -9,7 +9,7 @@ This project is an Electron + Vue 3 desktop UI.
 - `src/platform/`: runtime bridge/adapters (for example `electron-bridge.ts`).
 - `src/styles/`: global styles.
 - `src/types/`: shared TypeScript types.
-- `electron/`: Electron main/preload/runtime modules (`main-process.cjs`, `preload-bridge.cjs`, `apps-manager.cjs`, `settings-store.cjs`).
+- `electron/`: main/preload/runtime modules (`main-process.cjs`, `preload-bridge.cjs`, `apps-manager.cjs`, `settings-store.cjs`).
 - `templates/node-hello-app/`: installable Node app template and developer guide.
 - `dist/`: build output (generated; do not edit manually).
 
@@ -18,12 +18,12 @@ Use `pnpm` for all workflows.
 
 - `pnpm install`: install dependencies.
 - `pnpm dev`: run Vite web dev server only.
-- `pnpm electron:dev`: run Vite + Electron together for desktop development.
+- `pnpm electron:dev`: run Vite + desktop runtime together for development.
 - `pnpm typecheck`: run TypeScript checks (`vue-tsc`).
 - `pnpm build`: run type-check and production build.
 - `pnpm preview`: preview built web assets.
-- `pnpm electron:start`: launch Electron directly (fast start, no forced build).
-- `pnpm electron:start:build`: build first, then launch Electron.
+- `pnpm electron:start`: launch application directly (fast start, no forced build).
+- `pnpm electron:start:build`: build first, then launch application.
 
 ## Agent Operation Rule
 - Do not run dependency installation commands automatically (for example `pnpm install`, `npm install`, `yarn install`, `pnpm add`).
@@ -34,7 +34,7 @@ Use `pnpm` for all workflows.
 - Indentation: 2 spaces; keep semicolons and double quotes consistent with existing files.
 - Components: `PascalCase.vue` (example: `AppTopMenu.vue`).
 - Non-component files: `kebab-case` (example: `settings.ts`).
-- Keep Electron security defaults: `contextIsolation: true`, `nodeIntegration: false`.
+- Keep security defaults: `contextIsolation: true`, `nodeIntegration: false`.
 - Add new native capabilities via preload bridge, not direct renderer Node access.
 - App category mapping is DB-driven (`apps.tab_id` in SQLite), not `app.json`.
 
@@ -54,7 +54,7 @@ If you add tests later, place them near source (`src/**`) with clear `*.test.ts`
 ## Runtime Data & Safety
 - Settings DB:
   - dev: `data/settings.sqlite`
-  - packaged: Electron `userData/settings.sqlite`
+  - packaged: `userData/settings.sqlite`
 - Apps root (fixed): `%USERPROFILE%\\.tool-hub\\apps`
 - Apps DB (fixed): `%USERPROFILE%\\.tool-hub\\apps.sqlite`
 - `Remove` deletes the installed app directory and DB records. Do not use this flow for source directories you want to keep.

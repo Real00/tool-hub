@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   initializeSettingsDatabase() {
     return ipcRenderer.invoke("settings:initialize-db");
   },
+  backupConfiguration() {
+    return ipcRenderer.invoke("settings:backup-config");
+  },
+  restoreConfigurationFromArchive() {
+    return ipcRenderer.invoke("settings:restore-config");
+  },
   getGeneratorSettings() {
     return ipcRenderer.invoke("generator:get-settings");
   },

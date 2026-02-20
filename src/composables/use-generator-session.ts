@@ -335,6 +335,8 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     try {
       const projects = await listGeneratorProjects();
       generatorProjects.value = [...projects].sort((a, b) => b.updatedAt - a.updatedAt);
+      generatorStatus.value = "success";
+      generatorMessage.value = `Loaded ${projects.length} generator project(s).`;
       if (projects.length === 0) {
         clearSelectedProjectData();
         return;
@@ -344,9 +346,9 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
         ? generatorProjectId.value
         : projects[0].projectId;
       await refreshSelectedProject(targetProjectId);
-    } catch {
-      generatorProjects.value = [];
-      clearSelectedProjectData();
+    } catch (error) {
+      generatorStatus.value = "error";
+      generatorMessage.value = `Load generator projects failed: ${formatError(error)}`;
     }
   }
 

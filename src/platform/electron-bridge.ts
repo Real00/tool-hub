@@ -1,4 +1,8 @@
-import type { TabDefinition } from "../types/settings";
+import type {
+  ConfigBackupResult,
+  ConfigRestoreResult,
+  TabDefinition,
+} from "../types/settings";
 import type { AppsRootInfo, InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
 import type {
@@ -24,6 +28,8 @@ interface ToolHubApi {
   getSettingsTabs: () => Promise<TabDefinition[]>;
   saveSettingsTabs: (tabs: TabDefinition[]) => Promise<TabDefinition[]>;
   initializeSettingsDatabase: () => Promise<TabDefinition[]>;
+  backupConfiguration: () => Promise<ConfigBackupResult>;
+  restoreConfigurationFromArchive: () => Promise<ConfigRestoreResult>;
   getGeneratorSettings: () => Promise<GeneratorSettings>;
   saveGeneratorSettings: (input: GeneratorSettings) => Promise<GeneratorSettings>;
   detectClaudeCli: () => Promise<ClaudeCliDetectionResult>;
@@ -109,6 +115,14 @@ export function saveSettingsTabs(tabs: TabDefinition[]): Promise<TabDefinition[]
 
 export function initializeSettingsDatabase(): Promise<TabDefinition[]> {
   return getApi().initializeSettingsDatabase();
+}
+
+export function backupConfiguration(): Promise<ConfigBackupResult> {
+  return getApi().backupConfiguration();
+}
+
+export function restoreConfigurationFromArchive(): Promise<ConfigRestoreResult> {
+  return getApi().restoreConfigurationFromArchive();
 }
 
 export function getGeneratorSettings(): Promise<GeneratorSettings> {

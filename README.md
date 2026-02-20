@@ -1,6 +1,6 @@
-# Electron Tool Hub UI
+# Tool Hub
 
-UI shell built with Vue 3 + Tailwind CSS for an Electron desktop toolbox.
+桌面工具集应用，使用 Vue 3 + Tailwind CSS 构建。
 
 ## Start
 
@@ -9,16 +9,16 @@ pnpm install
 pnpm dev
 ```
 
-## Run with Electron
+## 运行应用
 
-Commands:
+开发模式：
 
 ```bash
 pnpm install
 pnpm electron:dev
 ```
 
-- `pnpm electron:dev`: development mode with hot reload, no build required after each change.
+- `pnpm electron:dev`: 开发模式，支持热重载。
 
 ## Build
 
@@ -26,14 +26,14 @@ pnpm electron:dev
 pnpm build
 ```
 
-## Run built app with Electron
+## 运行构建后的应用
 
 ```bash
 pnpm electron:start
 ```
 
-- `pnpm electron:start`: start Electron directly (fast, no forced build).
-- `pnpm electron:start:build`: build first, then start Electron.
+- `pnpm electron:start`: 直接启动应用（快速启动）。
+- `pnpm electron:start:build`: 先构建再启动。
 
 ## Define tabs in settings
 
@@ -57,8 +57,8 @@ defaultTabs: [
 - Open **Settings** in the top bar.
 - Edit tab labels/ids and click **Save**.
 - Use **Init DB** in settings tabs section to initialize/check settings DB schema.
-- In development, data is stored in `data/settings.sqlite`.
-- In packaged builds, data is stored under Electron `userData` path.
+- 在开发环境中，数据存储在 `data/settings.sqlite`。
+- 在打包后的应用中，数据存储在用户数据目录。
 
 ## Node app runtime (fixed user directory)
 
@@ -69,7 +69,7 @@ defaultTabs: [
 - Use **Remove** to uninstall an app (deletes app folder + DB records).
 - Each app runs in an isolated Node process with its own cwd/env.
 - Apps are grouped under top tabs by `apps.tab_id` in SQLite.
-- App UI opens in a separate Electron window (not embedded in main page).
+- 应用 UI 在独立窗口中打开（不嵌入主页面）。
 - A runnable template is available at `templates/node-hello-app`.
 
 ### App UI host API
@@ -137,13 +137,13 @@ src/
 
 - Vue components use `PascalCase.vue` (example: `AppTopMenu.vue`)
 - Non-component source files use `kebab-case` (example: `settings.ts`)
-- Electron process files use explicit role names (`main-process.cjs`, `preload-bridge.cjs`)
+- 进程文件使用明确的角色命名（`main-process.cjs`、`preload-bridge.cjs`）
 
-## Current Electron bridge
+## 技术架构
 
-- Frontend bridge: `src/platform/electron-bridge.ts`
-- SQLite stores: `electron/settings-store.cjs`, `electron/apps-manager.cjs`
-- Electron IPC handlers: `electron/main-process.cjs`, `electron/preload-bridge.cjs`
+- 前端桥接：`src/platform/electron-bridge.ts`
+- SQLite 存储：`electron/settings-store.cjs`、`electron/apps-manager.cjs`
+- IPC 处理器：`electron/main-process.cjs`、`electron/preload-bridge.cjs`
 - API methods:
   - `ping`
   - `getSettingsTabs`

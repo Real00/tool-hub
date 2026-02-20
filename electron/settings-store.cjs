@@ -5,11 +5,11 @@ const { open } = require("sqlite");
 const sqlite3 = require("sqlite3");
 
 const DEFAULT_TABS = [
-  { id: "workspace", label: "Workspace" },
-  { id: "projects", label: "Projects" },
-  { id: "automation", label: "Automation" },
-  { id: "monitoring", label: "Monitoring" },
-  { id: "security", label: "Security" },
+  { id: "workspace", label: "工作区" },
+  { id: "projects", label: "项目" },
+  { id: "automation", label: "自动化" },
+  { id: "monitoring", label: "监控" },
+  { id: "security", label: "安全" },
 ];
 
 let dbPromise = null;
@@ -164,6 +164,18 @@ async function initializeSettingsStore() {
   return getSettingsTabs();
 }
 
+async function closeSettingsStore() {
+  if (!dbPromise) {
+    return false;
+  }
+
+  const activePromise = dbPromise;
+  dbPromise = null;
+  const db = await activePromise;
+  await db.close();
+  return true;
+}
+
 async function getGeneratorSettings() {
   const db = await getDb();
   const claudeCliPath = await getGeneratorSettingValue(db, "claude_cli_path", "");
@@ -178,6 +190,7 @@ async function saveGeneratorSettings(input) {
 }
 
 module.exports = {
+  closeSettingsStore,
   getGeneratorSettings,
   getSettingsTabs,
   initializeSettingsStore,

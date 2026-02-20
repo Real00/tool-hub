@@ -4,6 +4,7 @@ import { defaultTabs } from "../config/settings";
 import type { AppsRootInfo, InstalledApp } from "../types/app";
 import type { TabDefinition } from "../types/settings";
 import {
+  backupConfiguration,
   getAppLogs,
   getAppsRoot,
   getSettingsTabs,
@@ -17,6 +18,7 @@ import {
   pingBackend,
   refreshSystemAppsIndex,
   removeApp,
+  restoreConfigurationFromArchive,
   saveSettingsTabs,
   startApp,
   stopApp,
@@ -90,6 +92,12 @@ function createToolHubState() {
   const bridgeMessage = ref("Electron backend not connected yet.");
   const systemAppsStatus = ref<"idle" | "loading" | "success" | "error">("idle");
   const systemAppsMessage = ref("System app index can be refreshed manually.");
+  const backupStatus = ref<"idle" | "loading" | "success" | "error">("idle");
+  const backupMessage = ref(
+    "Backup ZIP includes .tool-hub (apps, generator, apps.sqlite) and settings.sqlite.",
+  );
+  const restoreStatus = ref<"idle" | "loading" | "success" | "error">("idle");
+  const restoreMessage = ref("Restore supports backup ZIP created by Tool Hub.");
 
   const settingsStatus = ref<"idle" | "saving" | "success" | "error">("idle");
   const settingsMessage = ref("Edit tabs and save to local SQLite.");
@@ -273,6 +281,80 @@ function createToolHubState() {
     } catch (error) {
       systemAppsStatus.value = "error";
       systemAppsMessage.value = `System app refresh failed: ${formatError(error)}`;
+    }
+  }
+
+  async function backupConfigData() {
+    if (!isElectronRuntime()) {
+      backupStatus.value = "error";
+      backupMessage.value = "Backup is only available in Electron runtime.";
+      return;
+    }
+
+    backupStatus.value = "loading";
+    backupMessage.value = "Creating backup...";
+
+    try {
+      const result = await backupConfiguration();
+      if (result.canceled) {
+        backupStatus.value = "idle";
+        backupMessage.value = "Backup canceled.";
+        return;
+      }
+      backupStatus.value = "success";
+      backupMessage.value = `Backup ZIP created: ${result.archivePath} (${result.includedPaths.length} item(s)).`;
+    } catch (error) {
+      backupStatus.value = "error";
+      backupMessage.value = `Backup failed: ${formatError(error)}`;
+    }
+  }
+
+  async function restoreConfigData() {
+    if (!isElectronRuntime()) {
+      restoreStatus.value = "error";
+      restoreMessage.value = "Restore is only available in Electron runtime.";
+      return;
+    }
+
+    if (
+      !window.confirm(
+        "Restore will overwrite current configuration (.tool-hub and settings DB). Continue?",
+      )
+    ) {
+      restoreStatus.value = "idle";
+      restoreMessage.value = "Restore canceled.";
+      return;
+    }
+
+    restoreStatus.value = "loading";
+    restoreMessage.value = "Restoring from backup ZIP...";
+    const shouldResumePolling = !!appsPollingTimer;
+    if (appsPollingTimer) {
+      clearInterval(appsPollingTimer);
+      appsPollingTimer = null;
+    }
+
+    try {
+      const result = await restoreConfigurationFromArchive();
+      if (result.canceled) {
+        restoreStatus.value = "idle";
+        restoreMessage.value = "Restore canceled.";
+        return;
+      }
+      restoreStatus.value = "success";
+      restoreMessage.value = result.restartRecommended
+        ? `Restore completed from ${result.archivePath}. Restart app for a clean state.`
+        : `Restore completed from ${result.archivePath}.`;
+      await loadTabsFromStorage();
+      await loadAppsData();
+      await loadGeneratorProjects();
+    } catch (error) {
+      restoreStatus.value = "error";
+      restoreMessage.value = `Restore failed: ${formatError(error)}`;
+    } finally {
+      if (shouldResumePolling) {
+        startAppsPolling();
+      }
     }
   }
 
@@ -643,6 +725,9 @@ function createToolHubState() {
     appsStatus,
     autoDetectClaudePath,
     autofillTabId,
+    backupConfigData,
+    backupMessage,
+    backupStatus,
     bridgeMessage,
     bridgeStatus,
     systemAppsMessage,
@@ -688,6 +773,9 @@ function createToolHubState() {
     moveTabRowTo,
     removeNodeApp,
     removeTabRow,
+    restoreConfigData,
+    restoreMessage,
+    restoreStatus,
     runtimeLabel,
     refreshSystemAppsData,
     resizeEmbeddedTerminal,
