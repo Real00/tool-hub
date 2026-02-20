@@ -12,12 +12,6 @@ export interface ClaudeCliDetectionResult {
   candidates: string[];
 }
 
-export interface GeneratorMessage {
-  role: "user" | "assistant";
-  content: string;
-  createdAt: number;
-}
-
 export interface GeneratorProjectFileEntry {
   path: string;
   type: "file" | "directory";
@@ -31,8 +25,6 @@ export interface GeneratorProjectSummary {
   createdAt: number;
   updatedAt: number;
   running: boolean;
-  runningOutput: string;
-  messageCount: number;
   fileCount: number;
   hasManifest: boolean;
   appId: string | null;
@@ -41,7 +33,6 @@ export interface GeneratorProjectSummary {
 }
 
 export interface GeneratorProjectDetail extends GeneratorProjectSummary {
-  messages: GeneratorMessage[];
   files: GeneratorProjectFileEntry[];
 }
 
@@ -50,16 +41,6 @@ export interface GeneratorProjectFileContent {
   filePath: string;
   content: string;
   truncated: boolean;
-}
-
-export interface GeneratorChatResult {
-  cliPath: string;
-  assistantMessage: string;
-  rawOutput: {
-    stdout: string;
-    stderr: string;
-  };
-  project: GeneratorProjectDetail;
 }
 
 export interface GeneratorInstallResult {

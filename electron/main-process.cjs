@@ -1336,18 +1336,6 @@ ipcMain.handle(
 );
 
 ipcMain.handle(
-  "generator:chat-project",
-  async (_event, projectId, message, cliPathOverride) => {
-    return getAppGenerator().chatInProject(
-      getSettingsStore(),
-      projectId,
-      message,
-      cliPathOverride,
-    );
-  },
-);
-
-ipcMain.handle(
   "generator:install-project",
   async (_event, projectId, tabId, overwriteExisting) => {
     return getAppGenerator().installProjectApp(

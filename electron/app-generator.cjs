@@ -17,11 +17,9 @@ const TEMPLATE_DIR_REL = "../templates/node-hello-app";
 
 const CHAT_TIMEOUT_MS = 240000;
 const MAX_OUTPUT_CHARS = 2_000_000;
-const RUNNING_OUTPUT_MAX_CHARS = 120000;
 const MAX_FILE_READ_BYTES = 200000;
 const TERMINAL_OUTPUT_MAX_CHARS = 200000;
 
-const projectRuntime = new Map();
 const terminalRuntime = new Map();
 const terminalSubscribers = new Map();
 
@@ -89,23 +87,7 @@ function defaultProjectMetadata() {
   return {
     createdAt: t,
     updatedAt: t,
-    runningOutput: "",
-    messages: [],
   };
-}
-
-function sanitizeMessages(input) {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-
-  return input
-    .filter((item) => item && typeof item === "object")
-    .map((item) => ({
-      role: item.role === "assistant" ? "assistant" : "user",
-      content: String(item.content ?? ""),
-      createdAt: Number(item.createdAt ?? now()),
-    }));
 }
 
 function readProjectMetadata(projectDir) {
@@ -119,8 +101,6 @@ function readProjectMetadata(projectDir) {
     return {
       createdAt: Number(parsed.createdAt ?? now()),
       updatedAt: Number(parsed.updatedAt ?? now()),
-      runningOutput: String(parsed.runningOutput ?? ""),
-      messages: sanitizeMessages(parsed.messages),
     };
   } catch {
     return defaultProjectMetadata();
@@ -131,42 +111,8 @@ function writeProjectMetadata(projectDir, metadata) {
   const next = {
     createdAt: Number(metadata.createdAt ?? now()),
     updatedAt: Number(metadata.updatedAt ?? now()),
-    runningOutput: String(metadata.runningOutput ?? ""),
-    messages: sanitizeMessages(metadata.messages),
   };
   writeJson(resolveProjectMetadataPath(projectDir), next);
-}
-
-function ensureProjectRuntime(projectId, metadata) {
-  const existing = projectRuntime.get(projectId);
-  if (existing) {
-    return existing;
-  }
-
-  const state = {
-    running: false,
-    runningOutput: String(metadata?.runningOutput ?? ""),
-    updatedAt: Number(metadata?.updatedAt ?? now()),
-  };
-  projectRuntime.set(projectId, state);
-  return state;
-}
-
-function appendRunningOutput(projectId, stream, text) {
-  const chunk = String(text ?? "");
-  if (!chunk) {
-    return;
-  }
-
-  const state = ensureProjectRuntime(projectId, null);
-  const prefix = stream === "stderr" ? "[stderr] " : "[stdout] ";
-  state.runningOutput = `${state.runningOutput}${prefix}${chunk}`;
-  if (state.runningOutput.length > RUNNING_OUTPUT_MAX_CHARS) {
-    state.runningOutput = state.runningOutput.slice(
-      state.runningOutput.length - RUNNING_OUTPUT_MAX_CHARS,
-    );
-  }
-  state.updatedAt = now();
 }
 
 function detectTerminalShell() {
@@ -257,7 +203,7 @@ function subscribeProjectTerminal(projectIdInput, listener) {
   };
 }
 
-function ensureTerminalState(projectId) {
+function ensureTerminalState(projectId, seed = null) {
   const existing = terminalRuntime.get(projectId);
   if (existing) {
     return existing;
@@ -269,12 +215,12 @@ function ensureTerminalState(projectId) {
     outputSeq: 0,
     lastChunk: "",
     startedAt: null,
-    updatedAt: now(),
+    updatedAt: Number(seed?.updatedAt ?? now()),
     lastExitCode: null,
     ptyProcess: null,
     shellCommand: "",
-    cols: 120,
-    rows: 36,
+    cols: Number(seed?.cols ?? 120),
+    rows: Number(seed?.rows ?? 36),
   };
   terminalRuntime.set(projectId, state);
   return state;
@@ -454,7 +400,9 @@ function buildProjectSummary(projectId) {
   }
 
   const metadata = readProjectMetadata(projectDir);
-  const runtime = ensureProjectRuntime(projectId, metadata);
+  const terminal = ensureTerminalState(projectId, {
+    updatedAt: metadata.updatedAt,
+  });
   const files = collectProjectFiles(projectDir);
   const manifest = readManifestSummary(projectDir);
 
@@ -462,10 +410,8 @@ function buildProjectSummary(projectId) {
     projectId,
     projectDir,
     createdAt: metadata.createdAt,
-    updatedAt: Math.max(metadata.updatedAt, runtime.updatedAt),
-    running: Boolean(runtime.running),
-    runningOutput: String(runtime.runningOutput ?? ""),
-    messageCount: metadata.messages.length,
+    updatedAt: Math.max(metadata.updatedAt, terminal.updatedAt),
+    running: Boolean(terminal.running),
     fileCount: files.filter((item) => item.type === "file").length,
     ...manifest,
   };
@@ -473,12 +419,10 @@ function buildProjectSummary(projectId) {
 
 function buildProjectDetail(projectId) {
   const summary = buildProjectSummary(projectId);
-  const metadata = readProjectMetadata(summary.projectDir);
   const files = collectProjectFiles(summary.projectDir);
 
   return {
     ...summary,
-    messages: metadata.messages.map((item) => ({ ...item })),
     files,
   };
 }
@@ -524,7 +468,7 @@ function createProject(projectName) {
 
   const metadata = defaultProjectMetadata();
   writeProjectMetadata(projectDir, metadata);
-  ensureProjectRuntime(projectId, metadata);
+  ensureTerminalState(projectId);
 
   return buildProjectDetail(projectId);
 }
@@ -688,37 +632,6 @@ function resizeProjectTerminal(projectIdInput, colsInput, rowsInput) {
   state.updatedAt = now();
   emitTerminalUpdate(projectId);
   return toPublicTerminalState(projectId, state);
-}
-
-function normalizeMessageText(input) {
-  return String(input ?? "").trim();
-}
-
-function serializeConversation(messages) {
-  return messages
-    .map((item, index) => `${index + 1}. ${item.role.toUpperCase()}:\n${item.content}`)
-    .join("\n\n");
-}
-
-function buildClaudeEditPrompt(projectId, messages, userMessage) {
-  const conversation = [...messages, { role: "user", content: userMessage }];
-
-  return [
-    "You are Claude Code editing files in the current working directory.",
-    `Current generator project id: ${projectId}`,
-    "Important:",
-    "1) Directly modify/create files in this project to satisfy the latest user request.",
-    "2) Keep app.json valid JSON.",
-    "3) Keep app.json fields: id, name, version, entry, and uiPath.",
-    "4) entry and uiPath must point to existing files after your edits.",
-    "5) Keep changes minimal and runnable.",
-    "6) Reply in Chinese with a short summary of what you changed.",
-    "",
-    "Conversation history:",
-    serializeConversation(conversation),
-    "",
-    "Now implement the latest user request by editing files directly.",
-  ].join("\n");
 }
 
 function isWindowsBatchLike(command) {
@@ -904,138 +817,15 @@ async function detectClaudeCli(settingsStore) {
   };
 }
 
-async function resolveClaudeExecutable(settingsStore, cliPathOverride) {
-  const overridePath = String(cliPathOverride ?? "").trim();
-  const detection = await detectClaudeCli(settingsStore);
-  const candidates = uniqueStrings([
-    ...expandCommandCandidates(overridePath),
-    ...(overridePath ? [] : detection.resolvedPath ? [detection.resolvedPath] : []),
-    ...collectClaudeCandidates(),
-  ]);
-
-  let lastError = null;
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    const probe = await probeClaudeCommand(candidate);
-    if (probe.ok) {
-      return candidate;
-    }
-    lastError = probe.error;
-  }
-
-  if (overridePath) {
-    throw new Error(
-      `Cannot execute configured Claude CLI path: ${overridePath}. ${lastError ?? ""}`.trim(),
-    );
-  }
-  throw new Error(
-    `Claude CLI not found. Please set the path in settings. ${lastError ?? ""}`.trim(),
-  );
-}
-
-async function runClaudePrompt(executable, prompt, cwd, hooks = {}) {
-  const attempts = [
-    ["--dangerously-skip-permissions", "-p", prompt],
-    ["-p", prompt],
-  ];
-
-  let lastError = "Unknown Claude CLI error.";
-  for (let i = 0; i < attempts.length; i += 1) {
-    const args = attempts[i];
-    const result = await runCommand(executable, args, {
-      cwd,
-      timeoutMs: CHAT_TIMEOUT_MS,
-      onStdout: hooks.onStdout,
-      onStderr: hooks.onStderr,
-    });
-    if (result.code === 0) {
-      return result;
-    }
-
-    lastError = (result.stderr || result.stdout || `exit code ${result.code}`).trim();
-  }
-
-  throw new Error(`Claude CLI failed: ${lastError}`);
-}
-
-async function chatInProject(settingsStore, projectIdInput, userMessage, cliPathOverride) {
-  const { projectId, projectDir } = resolveProjectDir(projectIdInput);
-  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
-    throw new Error(`Project not found: ${projectId}`);
-  }
-
-  const text = normalizeMessageText(userMessage);
-  if (!text) {
-    throw new Error("Message is required.");
-  }
-
-  const metadata = readProjectMetadata(projectDir);
-  const runtime = ensureProjectRuntime(projectId, metadata);
-  if (runtime.running) {
-    throw new Error("Claude task is already running for this project.");
-  }
-
-  const executable = await resolveClaudeExecutable(settingsStore, cliPathOverride);
-  const prompt = buildClaudeEditPrompt(projectId, metadata.messages, text);
-
-  runtime.running = true;
-  runtime.runningOutput = "[system] Claude command started...\n";
-  runtime.updatedAt = now();
-
-  let result;
-  try {
-    result = await runClaudePrompt(executable, prompt, projectDir, {
-      onStdout: (chunk) => appendRunningOutput(projectId, "stdout", chunk),
-      onStderr: (chunk) => appendRunningOutput(projectId, "stderr", chunk),
-    });
-  } finally {
-    runtime.running = false;
-    runtime.updatedAt = now();
-    if (!runtime.runningOutput.trim()) {
-      runtime.runningOutput = "[system] Claude command finished with no stream output.\n";
-    }
-  }
-
-  const assistantText =
-    String(result.stdout ?? "").trim() ||
-    String(result.stderr ?? "").trim() ||
-    "已完成文件修改。";
-
-  const userCreatedAt = now();
-  metadata.messages.push({
-    role: "user",
-    content: text,
-    createdAt: userCreatedAt,
-  });
-  metadata.messages.push({
-    role: "assistant",
-    content: assistantText,
-    createdAt: now(),
-  });
-  metadata.runningOutput = runtime.runningOutput;
-  metadata.updatedAt = now();
-  writeProjectMetadata(projectDir, metadata);
-
-  return {
-    cliPath: executable,
-    assistantMessage: assistantText,
-    rawOutput: {
-      stdout: String(result.stdout ?? ""),
-      stderr: String(result.stderr ?? ""),
-    },
-    project: buildProjectDetail(projectId),
-  };
-}
-
 async function installProjectApp(appsManager, projectIdInput, requestedTabId, overwriteExisting = false) {
   const { projectId, projectDir } = resolveProjectDir(projectIdInput);
   if (!appsManager?.installAppFromDirectory) {
     throw new Error("Apps manager is unavailable.");
   }
 
-  const runtime = ensureProjectRuntime(projectId, null);
-  if (runtime.running) {
-    throw new Error("Project is busy. Please wait for Claude task to finish.");
+  const terminal = ensureTerminalState(projectId);
+  if (terminal.running) {
+    throw new Error("Project terminal is running. Please stop it before install.");
   }
 
   const summary = readManifestSummary(projectDir);
@@ -1061,9 +851,8 @@ async function installProjectApp(appsManager, projectIdInput, requestedTabId, ov
   const installedApps = await appsManager.installAppFromDirectory(projectDir, tabId, shouldOverwrite);
   const metadata = readProjectMetadata(projectDir);
   metadata.updatedAt = now();
-  metadata.runningOutput = runtime.runningOutput;
   writeProjectMetadata(projectDir, metadata);
-  runtime.updatedAt = metadata.updatedAt;
+  terminal.updatedAt = metadata.updatedAt;
 
   return {
     generatedAppId: summary.appId,
@@ -1074,7 +863,6 @@ async function installProjectApp(appsManager, projectIdInput, requestedTabId, ov
 
 module.exports = {
   createProject,
-  chatInProject,
   detectClaudeCli,
   getGeneratorSettings,
   getProject,

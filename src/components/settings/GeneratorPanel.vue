@@ -410,8 +410,9 @@ watch(
             </div>
         </div>
         <p class="mt-2 text-sm text-slate-400">
-            Select a generator project folder, chat with Claude to modify files,
-            inspect file content, and install the whole project for validation.
+            Select a generator project folder, run Claude CLI in the embedded
+            terminal to modify files, inspect file content, and install the
+            whole project for validation.
         </p>
 
         <div class="mt-4 grid gap-2 md:grid-cols-[1fr_220px]">
@@ -478,7 +479,7 @@ watch(
                     >
                         <p class="font-medium">{{ project.projectId }}</p>
                         <p class="mt-1 text-slate-400">
-                            {{ project.fileCount }} files · {{ project.messageCount }} msgs
+                            {{ project.fileCount }} files
                         </p>
                         <p class="mt-1 text-slate-500">{{ project.running ? "running" : "idle" }}</p>
                     </button>
@@ -578,32 +579,6 @@ watch(
                     </div>
                 </div>
 
-                <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                    <div class="max-h-[clamp(160px,24vh,300px)] space-y-2 overflow-auto pr-1">
-                        <div
-                            v-for="(
-                                item, index
-                            ) in generatorProject?.messages ?? []"
-                            :key="`generator-msg-${index}`"
-                            class="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-xs"
-                        >
-                            <p class="uppercase tracking-wide text-slate-400">
-                                {{ item.role }} · {{ formatTime(item.createdAt) }}
-                            </p>
-                            <p class="mt-1 whitespace-pre-wrap text-slate-200">
-                                {{ item.content }}
-                            </p>
-                        </div>
-                        <p
-                            v-if="
-                                (generatorProject?.messages ?? []).length === 0
-                            "
-                            class="text-xs text-slate-500"
-                        >
-                            No Claude conversation history yet.
-                        </p>
-                    </div>
-                </div>
             </div>
         </div>
 

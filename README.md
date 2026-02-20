@@ -76,7 +76,8 @@ defaultTabs: [
 
 When an app UI window is opened by Tool Hub, the host injects `window.toolHubAppApi` in that window:
 
-- `getRuntimeInfo()` -> returns `{ appId }`
+- `getRuntimeInfo()` -> returns `{ appId, launchPayload, launchPayloadUpdatedAt }`
+- `subscribeLaunchPayload(callback)` -> receive payload updates while window is open
 - `storage.get(key)`
 - `storage.set(key, value)`
 - `storage.delete(key)`
@@ -90,6 +91,13 @@ When an app UI window is opened by Tool Hub, the host injects `window.toolHubApp
 All storage entries are persisted in host SQLite and scoped by app id.
 `files.*` paths are constrained inside the current app directory.
 `systemFiles.*` supports absolute paths and may require elevated OS permissions for protected files.
+
+## Generator (terminal-first)
+
+- Generator page uses embedded terminal as the primary workflow.
+- Start Claude CLI from **Start Claude** and drive file edits directly in terminal.
+- Project summary no longer exposes chat-message metrics.
+- Removed legacy chat IPC endpoint: `generator:chat-project`.
 
 ### `app.json` (minimum)
 
@@ -144,27 +152,20 @@ src/
 - 前端桥接：`src/platform/electron-bridge.ts`
 - SQLite 存储：`electron/settings-store.cjs`、`electron/apps-manager.cjs`
 - IPC 处理器：`electron/main-process.cjs`、`electron/preload-bridge.cjs`
-- API methods:
+- API methods（renderer -> preload）:
   - `ping`
-  - `getSettingsTabs`
-  - `saveSettingsTabs`
-  - `getAppsRoot`
-  - `listApps`
-  - `installAppFromDirectory`
-  - `startApp`
-  - `stopApp`
-  - `getAppLogs`
-  - `openAppWindow`
-  - `pickInstallDirectory`
-- IPC channels:
+  - settings: `getSettingsTabs` `saveSettingsTabs` `initializeSettingsDatabase` `backupConfiguration` `restoreConfigurationFromArchive`
+  - generator: `getGeneratorSettings` `saveGeneratorSettings` `detectClaudeCli` `createGeneratorProject` `getGeneratorProject` `listGeneratorProjects` `readGeneratorProjectFile`
+  - generator terminal: `getGeneratorProjectTerminal` `startGeneratorProjectTerminal` `sendGeneratorProjectTerminalInput` `stopGeneratorProjectTerminal` `resizeGeneratorProjectTerminal` `subscribeGeneratorProjectTerminal`
+  - apps: `getAppsRoot` `listApps` `initializeAppsDatabase` `installAppFromDirectory` `startApp` `stopApp` `getAppLogs` `removeApp` `openAppWindow` `pickInstallDirectory`
+  - system apps: `refreshSystemAppsIndex` `searchSystemApps` `openSystemApp`
+  - quick launcher: `closeQuickLauncherWindow` `setQuickLauncherWindowSize` `subscribeQuickLauncherRequest`
+- IPC channels（main handlers/events）:
   - `tool-hub:ping`
-  - `settings:get-tabs`
-  - `settings:save-tabs`
-  - `apps:get-root`
-  - `apps:list`
-  - `apps:install-from-directory`
-  - `apps:start`
-  - `apps:stop`
-  - `apps:get-logs`
-  - `apps:open-window`
-  - `apps:pick-install-directory`
+  - settings: `settings:get-tabs` `settings:save-tabs` `settings:initialize-db` `settings:backup-config` `settings:restore-config`
+  - generator: `generator:get-settings` `generator:save-settings` `generator:detect-claude-cli` `generator:create-project` `generator:get-project` `generator:list-projects` `generator:read-project-file` `generator:install-project`
+  - generator terminal: `generator:get-terminal` `generator:start-terminal` `generator:terminal-input` `generator:stop-terminal` `generator:resize-terminal` `generator:terminal-subscribe` `generator:terminal-unsubscribe` `generator:terminal-output`
+  - apps: `apps:get-root` `apps:list` `apps:initialize-db` `apps:install-from-directory` `apps:start` `apps:stop` `apps:get-logs` `apps:remove` `apps:open-window` `apps:pick-install-directory`
+  - app runtime: `app-runtime:get-info` `app-runtime:launch-payload` `app-runtime:kv-get` `app-runtime:kv-set` `app-runtime:kv-delete` `app-runtime:kv-list` `app-runtime:kv-clear` `app-runtime:file-read` `app-runtime:file-write` `app-runtime:system-file-read` `app-runtime:system-file-write`
+  - system apps: `system-apps:refresh` `system-apps:search` `system-apps:open`
+  - quick launcher: `quick-launcher:open` `quick-launcher:close` `quick-launcher:set-size`

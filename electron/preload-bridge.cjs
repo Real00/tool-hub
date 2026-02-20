@@ -40,9 +40,6 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   readGeneratorProjectFile(projectId, filePath) {
     return ipcRenderer.invoke("generator:read-project-file", projectId, filePath);
   },
-  generatorChatInProject(projectId, message, cliPathOverride) {
-    return ipcRenderer.invoke("generator:chat-project", projectId, message, cliPathOverride);
-  },
   installGeneratorProjectApp(projectId, tabId, overwriteExisting) {
     return ipcRenderer.invoke("generator:install-project", projectId, tabId, overwriteExisting);
   },

@@ -61,8 +61,6 @@ function toSummary(project: GeneratorProjectDetail): GeneratorProjectSummary {
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
     running: project.running,
-    runningOutput: project.runningOutput,
-    messageCount: project.messageCount,
     fileCount: project.fileCount,
     hasManifest: project.hasManifest,
     appId: project.appId,

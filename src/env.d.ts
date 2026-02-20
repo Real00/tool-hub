@@ -3,7 +3,6 @@
 import type { AppsRootInfo, InstalledApp } from "./types/app";
 import type {
   ClaudeCliDetectionResult,
-  GeneratorChatResult,
   GeneratorInstallResult,
   GeneratorProjectDetail,
   GeneratorProjectFileContent,
@@ -36,11 +35,6 @@ declare global {
       projectId: string,
       filePath: string,
     ) => Promise<GeneratorProjectFileContent>;
-    generatorChatInProject: (
-      projectId: string,
-      message: string,
-      cliPathOverride?: string,
-    ) => Promise<GeneratorChatResult>;
     installGeneratorProjectApp: (
       projectId: string,
       tabId: string,

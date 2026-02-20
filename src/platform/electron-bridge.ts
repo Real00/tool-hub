@@ -7,7 +7,6 @@ import type { AppsRootInfo, InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
 import type {
   ClaudeCliDetectionResult,
-  GeneratorChatResult,
   GeneratorInstallResult,
   GeneratorProjectDetail,
   GeneratorProjectFileContent,
@@ -40,11 +39,6 @@ interface ToolHubApi {
     projectId: string,
     filePath: string,
   ) => Promise<GeneratorProjectFileContent>;
-  generatorChatInProject: (
-    projectId: string,
-    message: string,
-    cliPathOverride?: string,
-  ) => Promise<GeneratorChatResult>;
   installGeneratorProjectApp: (
     projectId: string,
     tabId: string,
@@ -154,14 +148,6 @@ export function readGeneratorProjectFile(
   filePath: string,
 ): Promise<GeneratorProjectFileContent> {
   return getApi().readGeneratorProjectFile(projectId, filePath);
-}
-
-export function generatorChatInProject(
-  projectId: string,
-  message: string,
-  cliPathOverride?: string,
-): Promise<GeneratorChatResult> {
-  return getApi().generatorChatInProject(projectId, message, cliPathOverride);
 }
 
 export function installGeneratorProjectApp(
