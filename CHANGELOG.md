@@ -3,6 +3,9 @@
 ## [0.1.3] - 2026-02-21
 
 ### Added
+- 新增 Runtime 管理页与路由入口（`RuntimePage`），支持在设置页查看运行时状态。
+- 快捷启动器新增最近历史记录与收藏能力（Top Menu / Quick Launcher）。
+- Generator 新增安装前校验与自动 Verify 工作流（含可配置 `verifyCommand`）。
 - 新增 `.no-scrollbar` 样式工具类，用于面板滚动区域简化视觉干扰。
 
 ### Fixed
@@ -10,6 +13,8 @@
 
 ### Changed
 - `GeneratorPanel` 信息架构与布局优化：状态徽标、折叠详情、项目快照与终端区域可读性提升。
+- 应用管理与运行时管理相关主流程改造（`apps-manager` / `main-process` / `preload` / bridge / state 同步更新）。
+- 文档与许可证声明更新为 noncommercial 约束（`LICENSE`、`README.md`、`package.json`）。
 
 ## [0.1.2] - 2026-02-20
 
