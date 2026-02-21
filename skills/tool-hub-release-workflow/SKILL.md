@@ -15,6 +15,31 @@ Repository conventions:
 - Avoid running dependency installation commands automatically.
 - Treat `v*` tags as release triggers.
 
+## Execution Safety (Parallel vs Sequential)
+
+To avoid race conditions, apply this rule strictly:
+- Only run independent read-only commands in parallel (mainly Step 1 collection).
+- Never run state-changing commands with dependencies in parallel.
+- `git add` and `git commit` must be sequential.
+- `git tag` must run only after a successful commit.
+- `git push origin <branch>` and `git push origin vX.Y.Z` must be sequential.
+
+Safe parallel examples:
+- `git status --short`, `git branch --show-current`, `git tag --list --sort=creatordate`
+- `git log --oneline --decorate --no-merges <last-tag>..HEAD`, `git diff --name-only <last-tag>..HEAD`
+
+Required sequential chain:
+1. Edit files
+2. `pnpm typecheck`
+3. `pnpm build`
+4. `git add <files>`
+5. `git diff --cached --name-only` (must be non-empty)
+6. `git commit -m "chore(release): vX.Y.Z"`
+7. Tag existence check
+8. `git tag vX.Y.Z`
+9. `git push origin <branch>`
+10. `git push origin vX.Y.Z`
+
 ## Required Inputs
 
 Collect these values before editing files:
@@ -69,8 +94,11 @@ Stage only intended release files and source changes:
 
 ```powershell
 git add <files>
+git diff --cached --name-only
 git commit -m "chore(release): vX.Y.Z"
 ```
+
+Before committing, ensure staged files are not empty. If empty, stop and restage.
 
 If release includes feature/fix commit(s) already made earlier, keep this commit focused on release metadata corrections only.
 
@@ -79,10 +107,13 @@ If release includes feature/fix commit(s) already made earlier, keep this commit
 Use tag-driven publish:
 
 ```powershell
+git rev-parse -q --verify refs/tags/vX.Y.Z
 git tag vX.Y.Z
 git push origin <branch>
 git push origin vX.Y.Z
 ```
+
+If `git rev-parse` returns an existing tag, stop and choose the next patch/minor version instead of reusing the tag.
 
 For this repo, pushing `v*` triggers `.github/workflows/release-win.yml`.
 
