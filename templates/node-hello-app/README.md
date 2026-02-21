@@ -9,6 +9,7 @@ This is a minimal app template for Tool Hub runtime:
 - `window.toolHubAppApi.files`: host-provided app-directory file read/write API for app UI
 - `window.toolHubAppApi.storage`: host-provided SQLite key/value persistence API for app UI
 - `window.toolHubAppApi.systemFiles`: host-provided absolute-path file read/write API
+- `window.toolHubAppApi.pickDirectory(options?)`: host-provided directory picker API (returns selected path, optional entries list)
 - `window.toolHubAppApi.getRuntimeInfo()`: includes `appId` and structured `launchContext` (`source` distinguishes `quick-launcher` / `manual` / `explorer-context-menu`)
 - `window.toolHubAppApi.subscribeLaunchContext(cb)`: receive structured context dispatch updates
 - `window.toolHubAppApi.notify(title, body, options?)`: send Windows system notification from app UI
@@ -23,6 +24,8 @@ This is a minimal app template for Tool Hub runtime:
    - The Hello App **Launch Payload** panel reads `launchContext.payload`, and `launchContext.source` will be `quick-launcher`.
 5. In the **Arbitrary Path File (Host System API)** panel, input an absolute path and test read/write.
    - For protected files (for example `hosts`), write operation may fail without admin rights.
+6. In the **Directory Picker (Host API)** panel, click **Pick Directory** or **Pick + Scan Entries**.
+   - Use `includeEntries/maxEntries/maxDepth` options to control returned directory entries.
 
 ## Capabilities in app.json
 

@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld("toolHubAppApi", {
   notify(title, body, options) {
     return ipcRenderer.invoke("app-runtime:notify", title, body, options);
   },
+  pickDirectory(options) {
+    return ipcRenderer.invoke("app-runtime:pick-directory", options);
+  },
   files: {
     read(filePath, options) {
       return ipcRenderer.invoke("app-runtime:file-read", filePath, options);

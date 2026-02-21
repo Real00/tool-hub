@@ -215,6 +215,19 @@
           </div>
 
           <div class="panel" style="grid-column: 1 / -1">
+            <p><strong>Directory Picker (Host API)</strong></p>
+            <p class="subtle">
+              Select a directory from host dialog via <code>window.toolHubAppApi.pickDirectory</code>.
+              The second button also returns a trimmed entries list.
+            </p>
+            <div class="row">
+              <button id="pick-dir-btn">Pick Directory</button>
+              <button id="pick-dir-scan-btn" class="accent">Pick + Scan Entries</button>
+            </div>
+            <textarea id="pick-dir-output" class="mono" readonly>Waiting for directory picker...</textarea>
+          </div>
+
+          <div class="panel" style="grid-column: 1 / -1">
             <p><strong>Arbitrary Path File (Host System API)</strong></p>
             <p class="subtle">
               This example calls <code>window.toolHubAppApi.systemFiles</code> in the host preload.
@@ -268,6 +281,7 @@
       const kvKeyInput = document.getElementById("kv-key");
       const kvValueInput = document.getElementById("kv-value");
       const fileOutput = document.getElementById("file-output");
+      const pickDirOutput = document.getElementById("pick-dir-output");
       const anyPathInput = document.getElementById("any-path-input");
       const anyPathContent = document.getElementById("any-path-content");
       const anyPathOutput = document.getElementById("any-path-output");
@@ -608,6 +622,50 @@
         }
         return hostAppApi.systemFiles;
       }
+
+      function setPickDirectoryOutput(value) {
+        if (!pickDirOutput) {
+          return;
+        }
+        pickDirOutput.value = String(value ?? "");
+      }
+
+      async function runDirectoryPicker(options) {
+        if (!hostAppApi?.pickDirectory) {
+          setPickDirectoryOutput("pickDirectory api unavailable");
+          showToast("Host pickDirectory API is unavailable.");
+          return;
+        }
+        try {
+          const result = await hostAppApi.pickDirectory(options);
+          if (!result) {
+            setPickDirectoryOutput("Directory selection canceled.");
+            showToast("Directory selection canceled.");
+            return;
+          }
+          setPickDirectoryOutput(JSON.stringify(result, null, 2));
+          showToast("Directory selection succeeded.");
+        } catch (error) {
+          setPickDirectoryOutput(String(error?.message || error));
+          showToast("Directory selection failed.");
+        }
+      }
+
+      document.getElementById("pick-dir-btn").addEventListener("click", () => {
+        runDirectoryPicker({
+          title: "Select working directory",
+        });
+      });
+
+      document.getElementById("pick-dir-scan-btn").addEventListener("click", () => {
+        runDirectoryPicker({
+          title: "Select directory and scan entries",
+          includeEntries: true,
+          maxEntries: 120,
+          maxDepth: 4,
+          includeHidden: false,
+        });
+      });
 
       document.getElementById("any-path-read-btn").addEventListener("click", async () => {
         try {

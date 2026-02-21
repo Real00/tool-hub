@@ -94,6 +94,11 @@ const CONTEXT_DISPATCH_MAX_QUEUE = 32;
 const CONTEXT_DISPATCH_PENDING_TTL_MS = 5000;
 const NOTIFICATION_MAX_TEXT_LENGTH = 200;
 const CONTEXT_TARGET_KINDS = new Set(["file", "folder", "unknown"]);
+const APP_RUNTIME_PICK_DIRECTORY_DEFAULT_TITLE = "Select directory";
+const APP_RUNTIME_PICK_DIRECTORY_DEFAULT_MAX_ENTRIES = 2000;
+const APP_RUNTIME_PICK_DIRECTORY_MAX_ENTRIES_LIMIT = 20000;
+const APP_RUNTIME_PICK_DIRECTORY_DEFAULT_MAX_DEPTH = 6;
+const APP_RUNTIME_PICK_DIRECTORY_MAX_DEPTH_LIMIT = 32;
 
 let mainWindow = null;
 let quickLauncherWindow = null;
@@ -1390,6 +1395,185 @@ function requireRuntimeAppId(event) {
   return appId;
 }
 
+function normalizeIntegerInRange(input, fallback, min, max) {
+  const numeric = Number(input);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
+function normalizeRuntimeDirectoryPickerOptions(input) {
+  const value = input && typeof input === "object" ? input : {};
+  const titleText = String(value.title ?? "").trim();
+  return {
+    title: titleText || APP_RUNTIME_PICK_DIRECTORY_DEFAULT_TITLE,
+    includeEntries: value.includeEntries === true,
+    includeHidden: value.includeHidden === true,
+    maxEntries: normalizeIntegerInRange(
+      value.maxEntries,
+      APP_RUNTIME_PICK_DIRECTORY_DEFAULT_MAX_ENTRIES,
+      1,
+      APP_RUNTIME_PICK_DIRECTORY_MAX_ENTRIES_LIMIT,
+    ),
+    maxDepth: normalizeIntegerInRange(
+      value.maxDepth,
+      APP_RUNTIME_PICK_DIRECTORY_DEFAULT_MAX_DEPTH,
+      0,
+      APP_RUNTIME_PICK_DIRECTORY_MAX_DEPTH_LIMIT,
+    ),
+  };
+}
+
+function shouldSkipHiddenEntry(entryName, includeHidden) {
+  if (includeHidden) {
+    return false;
+  }
+  return entryName.startsWith(".");
+}
+
+async function collectRuntimeDirectoryEntries(rootPath, options) {
+  const entries = [];
+  let truncated = false;
+
+  async function visitDirectory(absolutePath, relativePathPrefix, depth) {
+    if (truncated) {
+      return;
+    }
+
+    let dirEntries = [];
+    try {
+      dirEntries = await fs.promises.readdir(absolutePath, {
+        withFileTypes: true,
+      });
+    } catch {
+      return;
+    }
+
+    dirEntries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (let i = 0; i < dirEntries.length; i += 1) {
+      if (truncated) {
+        break;
+      }
+
+      const dirEntry = dirEntries[i];
+      const entryName = String(dirEntry?.name ?? "");
+      if (!entryName || entryName === "." || entryName === "..") {
+        continue;
+      }
+      if (shouldSkipHiddenEntry(entryName, options.includeHidden)) {
+        continue;
+      }
+
+      const currentAbsolutePath = path.join(absolutePath, entryName);
+      const relativePath = relativePathPrefix
+        ? `${relativePathPrefix}/${entryName}`
+        : entryName;
+
+      if (dirEntry.isDirectory()) {
+        entries.push({
+          relativePath,
+          kind: "folder",
+        });
+        if (entries.length >= options.maxEntries) {
+          truncated = true;
+          break;
+        }
+        if (depth < options.maxDepth) {
+          await visitDirectory(currentAbsolutePath, relativePath, depth + 1);
+        }
+        continue;
+      }
+
+      if (dirEntry.isFile()) {
+        const item = {
+          relativePath,
+          kind: "file",
+        };
+        try {
+          const stat = await fs.promises.stat(currentAbsolutePath);
+          if (stat.isFile()) {
+            item.size = stat.size;
+          }
+        } catch {
+          // Ignore stat errors and return entry without size.
+        }
+        entries.push(item);
+        if (entries.length >= options.maxEntries) {
+          truncated = true;
+          break;
+        }
+        continue;
+      }
+
+      if (!dirEntry.isSymbolicLink()) {
+        continue;
+      }
+
+      let stat = null;
+      try {
+        stat = await fs.promises.stat(currentAbsolutePath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        entries.push({
+          relativePath,
+          kind: "folder",
+        });
+        if (entries.length >= options.maxEntries) {
+          truncated = true;
+          break;
+        }
+        continue;
+      }
+      if (stat.isFile()) {
+        entries.push({
+          relativePath,
+          kind: "file",
+          size: stat.size,
+        });
+        if (entries.length >= options.maxEntries) {
+          truncated = true;
+          break;
+        }
+      }
+    }
+  }
+
+  await visitDirectory(rootPath, "", 0);
+  return {
+    entries,
+    truncated,
+  };
+}
+
+async function pickRuntimeDirectory(webContents, optionsInput) {
+  const options = normalizeRuntimeDirectoryPickerOptions(optionsInput);
+  const ownerWindow =
+    BrowserWindow.fromWebContents(webContents) || mainWindow || undefined;
+  const pickerResult = await dialog.showOpenDialog(ownerWindow, {
+    title: options.title,
+    properties: ["openDirectory", "dontAddToRecent"],
+  });
+  if (pickerResult.canceled || pickerResult.filePaths.length === 0) {
+    return null;
+  }
+  const selectedPath = path.resolve(pickerResult.filePaths[0]);
+  if (!options.includeEntries) {
+    return {
+      path: selectedPath,
+    };
+  }
+  const scanResult = await collectRuntimeDirectoryEntries(selectedPath, options);
+  return {
+    path: selectedPath,
+    entries: scanResult.entries,
+    truncated: scanResult.truncated,
+  };
+}
+
 function trimNotificationText(input, fallback = "", allowEmpty = false) {
   const text = String(input ?? "").trim();
   if (!text) {
@@ -2637,6 +2821,11 @@ ipcMain.handle("app-runtime:notify", async (event, titleInput, bodyInput, option
     silent: options?.silent === true,
   });
   return true;
+});
+
+ipcMain.handle("app-runtime:pick-directory", async (event, optionsInput) => {
+  requireRuntimeAppId(event);
+  return pickRuntimeDirectory(event.sender, optionsInput);
 });
 
 ipcMain.handle("app-runtime:kv-get", async (event, key) => {
