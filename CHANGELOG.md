@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.3] - 2026-02-21
+
+### Added
+- 新增 `.no-scrollbar` 样式工具类，用于面板滚动区域简化视觉干扰。
+
+### Fixed
+- Generator 的 **Start Claude** 默认优先恢复最近会话（`--continue`），恢复失败时自动回退为新会话启动。
+
+### Changed
+- `GeneratorPanel` 信息架构与布局优化：状态徽标、折叠详情、项目快照与终端区域可读性提升。
+
 ## [0.1.2] - 2026-02-20
 
 ### Added

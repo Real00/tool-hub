@@ -150,7 +150,7 @@ function emptyTerminalState(projectId = ""): GeneratorTerminalState {
   };
 }
 
-function buildClaudeLaunchCommand(input: string): string {
+function buildClaudeBaseCommand(input: string): string {
   const source = String(input ?? "").trim();
   if (!source) {
     return "claude";
@@ -178,6 +178,28 @@ function buildClaudeLaunchCommand(input: string): string {
     source.includes("/") ||
     /\.(exe|cmd|bat|ps1)$/i.test(source);
   return looksLikePath ? `"${source}"` : source;
+}
+
+function hasConversationStartupFlag(command: string): boolean {
+  return /(^|\s)(--continue|--resume|--new|-c|-r|-n)(?=\s|$)/i.test(command);
+}
+
+function isPowerShellCommand(shellCommand: string): boolean {
+  const source = String(shellCommand ?? "").toLowerCase();
+  return source.includes("pwsh") || source.includes("powershell");
+}
+
+function buildClaudeLaunchCommand(input: string, shellCommand = ""): string {
+  const baseCommand = buildClaudeBaseCommand(input);
+  if (hasConversationStartupFlag(baseCommand)) {
+    return baseCommand;
+  }
+
+  const resumeCommand = `${baseCommand} --continue`;
+  if (isPowerShellCommand(shellCommand)) {
+    return `${resumeCommand}; if ($LASTEXITCODE -ne 0) { ${baseCommand} }`;
+  }
+  return `${resumeCommand} || ${baseCommand}`;
 }
 
 export function useGeneratorSession(options: UseGeneratorSessionOptions) {
@@ -532,7 +554,10 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
       generatorTerminal.value = await startGeneratorProjectTerminal(projectId);
       attachGeneratorTerminalSubscription(projectId);
 
-      const launchCommand = buildClaudeLaunchCommand(claudeCliPath.value);
+      const launchCommand = buildClaudeLaunchCommand(
+        claudeCliPath.value,
+        generatorTerminal.value.shellCommand,
+      );
       try {
         generatorTerminal.value = await sendGeneratorProjectTerminalInput(
           projectId,

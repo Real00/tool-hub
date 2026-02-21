@@ -61,6 +61,10 @@ interface TreeRow {
 }
 
 const expandedDirs = ref<Set<string>>(new Set());
+const showCliConfig = ref(false);
+const showProjectMetaDetails = ref(false);
+const showValidationDetails = ref(false);
+const showVerifyDetails = ref(false);
 
 function buildTreeNodes(
     entries: Array<{
@@ -220,6 +224,84 @@ function reloadGeneratorPanel() {
 const hasSelectedProject = computed(() => Boolean(generatorProjectId.value));
 const isGeneratorLoading = computed(() => generatorStatus.value === "loading");
 const isTerminalLoading = computed(() => generatorTerminalStatus.value === "loading");
+const selectedProjectSummary = computed(() => {
+    if (generatorProjectId.value) {
+        const matched = generatorProjects.value.find(
+            (item) => item.projectId === generatorProjectId.value,
+        );
+        if (matched) {
+            return matched;
+        }
+    }
+    return generatorProject.value;
+});
+const terminalRunningClass = computed(() =>
+    generatorTerminal.value.running
+        ? "bg-emerald-500/20 text-emerald-200"
+        : "bg-slate-800 text-slate-300",
+);
+const generatorStatusClass = computed(() => {
+    return generatorStatus.value === "success"
+        ? "bg-emerald-500/20 text-emerald-200"
+        : generatorStatus.value === "error"
+          ? "bg-rose-500/20 text-rose-200"
+          : generatorStatus.value === "loading"
+            ? "bg-amber-500/20 text-amber-200"
+            : "bg-slate-800 text-slate-300";
+});
+const validationStatusClass = computed(() => {
+    return generatorValidationStatus.value === "success"
+        ? "bg-emerald-500/20 text-emerald-200"
+        : generatorValidationStatus.value === "error"
+          ? "bg-rose-500/20 text-rose-200"
+          : generatorValidationStatus.value === "loading"
+            ? "bg-amber-500/20 text-amber-200"
+            : "bg-slate-800 text-slate-300";
+});
+const verifyStatusClass = computed(() => {
+    return generatorVerifyStatus.value === "success"
+        ? "bg-emerald-500/20 text-emerald-200"
+        : generatorVerifyStatus.value === "error"
+          ? "bg-rose-500/20 text-rose-200"
+          : generatorVerifyStatus.value === "loading"
+            ? "bg-amber-500/20 text-amber-200"
+            : "bg-slate-800 text-slate-300";
+});
+const terminalStatusClass = computed(() => {
+    return generatorTerminalStatus.value === "success"
+        ? "bg-emerald-500/20 text-emerald-200"
+        : generatorTerminalStatus.value === "error"
+          ? "bg-rose-500/20 text-rose-200"
+          : generatorTerminalStatus.value === "loading"
+            ? "bg-amber-500/20 text-amber-200"
+            : "bg-slate-800 text-slate-300";
+});
+const manifestSummary = computed(() => {
+    if (!selectedProjectSummary.value || !selectedProjectSummary.value.hasManifest) {
+        return "missing app.json";
+    }
+    return `${selectedProjectSummary.value.appId ?? "-"} (${selectedProjectSummary.value.version ?? "-"})`;
+});
+const validationSummary = computed(() => {
+    if (!generatorValidationResult.value) {
+        return "No validation report yet.";
+    }
+    const errors = generatorValidationResult.value.errors.length;
+    const warnings = generatorValidationResult.value.warnings.length;
+    if (errors > 0) {
+        return `${errors} error(s), ${warnings} warning(s).`;
+    }
+    if (warnings > 0) {
+        return `No errors, ${warnings} warning(s).`;
+    }
+    return "No blocking validation issues.";
+});
+const verifySummary = computed(() => {
+    if (!generatorVerifyResult.value) {
+        return "No verify result yet.";
+    }
+    return `Exit ${generatorVerifyResult.value.exitCode ?? "-"} in ${generatorVerifyResult.value.durationMs}ms.`;
+});
 
 function handleProjectChange(projectId: string) {
     void selectGeneratorProject(projectId);
@@ -351,6 +433,9 @@ watch(
     () => generatorProjectId.value,
     (projectId) => {
         renderedOutput = "";
+        showProjectMetaDetails.value = false;
+        showValidationDetails.value = false;
+        showVerifyDetails.value = false;
         if (xterm) {
             xterm.reset();
         }
@@ -393,8 +478,8 @@ watch(
 </script>
 
 <template>
-    <section class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 md:p-6">
-        <div class="flex flex-wrap items-start justify-between gap-3">
+    <section class="rounded-2xl border border-slate-700 bg-slate-900/60 p-4 shadow-soft md:p-6">
+        <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 pb-3">
             <div>
                 <p class="text-sm font-medium text-slate-100">
                     AI app generator (Claude CLI)
@@ -403,54 +488,66 @@ watch(
                     Select a project, edit files through Claude CLI, then install to a target tab.
                 </p>
             </div>
-            <button
-                type="button"
-                class="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-                :disabled="isGeneratorLoading"
-                @click="reloadGeneratorPanel"
-            >
-                Reload
-            </button>
+            <div class="flex flex-wrap items-center gap-2">
+                <span
+                    v-if="selectedProjectSummary"
+                    class="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300"
+                >
+                    {{ selectedProjectSummary.projectId }}
+                </span>
+                <span
+                    class="rounded-md px-2 py-1 text-xs"
+                    :class="generatorStatusClass"
+                >
+                    {{ generatorStatus }}
+                </span>
+                <button
+                    type="button"
+                    class="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="isGeneratorLoading"
+                    @click="reloadGeneratorPanel"
+                >
+                    Reload
+                </button>
+            </div>
         </div>
 
-        <div class="mt-4 grid gap-3 xl:grid-cols-[minmax(280px,0.88fr)_minmax(0,2.12fr)]">
+        <div class="mt-4 grid gap-3 xl:grid-cols-[minmax(300px,0.9fr)_minmax(0,2.1fr)] xl:items-stretch">
             <aside class="space-y-3">
-                <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                        Claude CLI
-                    </p>
-                    <input
-                        v-model="claudeCliPath"
-                        type="text"
-                        placeholder="Claude CLI path or command (e.g. claude, C:\\Tools\\claude.exe)"
-                        class="mt-2 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-500/50 placeholder:text-slate-500 focus:ring"
-                    />
-                    <label class="mt-2 block text-[11px] text-slate-500">
-                        Verify Command
-                    </label>
-                    <input
-                        v-model="verifyCommand"
-                        type="text"
-                        placeholder="node --check src/index.js"
-                        class="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-500/50 placeholder:text-slate-500 focus:ring"
-                    />
-                    <div class="mt-2 grid grid-cols-2 gap-2">
+                <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3 xl:flex xl:h-[clamp(300px,34vh,420px)] xl:flex-col">
+                    <div class="flex items-center justify-between gap-2">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                            Projects
+                        </p>
+                        <span class="text-[11px] text-slate-500">
+                            {{ generatorProjects.length }} total
+                        </span>
+                    </div>
+                    <div class="no-scrollbar mt-2 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
                         <button
+                            v-for="project in generatorProjects"
+                            :key="project.projectId"
                             type="button"
-                            class="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-                            :disabled="isGeneratorLoading"
-                            @click="autoDetectClaudePath"
+                            class="w-full rounded-lg border px-3 py-2 text-left text-xs transition"
+                            :class="
+                                project.projectId === generatorProjectId
+                                    ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
+                                    : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-400 hover:text-cyan-200'
+                            "
+                            @click="handleProjectChange(project.projectId)"
                         >
-                            Detect Path
+                            <p class="font-medium">{{ project.projectId }}</p>
+                            <p class="mt-1 text-slate-400">
+                                {{ project.fileCount }} files
+                            </p>
+                            <p class="mt-1 text-slate-500">{{ project.running ? "running" : "idle" }}</p>
                         </button>
-                        <button
-                            type="button"
-                            class="rounded-lg bg-cyan-400 px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
-                            :disabled="isGeneratorLoading"
-                            @click="saveClaudePathConfig"
+                        <p
+                            v-if="generatorProjects.length === 0"
+                            class="text-xs text-slate-500"
                         >
-                            Save Settings
-                        </button>
+                            No projects yet. Create one to start.
+                        </p>
                     </div>
                 </div>
 
@@ -521,232 +618,313 @@ watch(
                 </div>
 
                 <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                    <div class="flex items-center justify-between gap-2">
+                    <button
+                        type="button"
+                        class="flex w-full items-center justify-between gap-2 text-left"
+                        @click="showCliConfig = !showCliConfig"
+                    >
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                            Projects
+                            Claude CLI
                         </p>
                         <span class="text-[11px] text-slate-500">
-                            {{ generatorProjects.length }} total
+                            {{ showCliConfig ? "Hide" : "Show" }}
                         </span>
+                    </button>
+                    <div v-if="showCliConfig" class="mt-3">
+                        <input
+                            v-model="claudeCliPath"
+                            type="text"
+                            placeholder="Claude CLI path or command (e.g. claude, C:\\Tools\\claude.exe)"
+                            class="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-500/50 placeholder:text-slate-500 focus:ring"
+                        />
+                        <label class="mt-2 block text-[11px] text-slate-500">
+                            Verify Command
+                        </label>
+                        <input
+                            v-model="verifyCommand"
+                            type="text"
+                            placeholder="node --check src/index.js"
+                            class="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-500/50 placeholder:text-slate-500 focus:ring"
+                        />
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <button
+                                type="button"
+                                class="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                :disabled="isGeneratorLoading"
+                                @click="autoDetectClaudePath"
+                            >
+                                Detect Path
+                            </button>
+                            <button
+                                type="button"
+                                class="rounded-lg bg-cyan-400 px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                :disabled="isGeneratorLoading"
+                                @click="saveClaudePathConfig"
+                            >
+                                Save Settings
+                            </button>
+                        </div>
                     </div>
-                    <div class="mt-2 max-h-[clamp(280px,44vh,620px)] space-y-2 overflow-auto pr-1">
-                        <button
-                            v-for="project in generatorProjects"
-                            :key="project.projectId"
-                            type="button"
-                            class="w-full rounded-lg border px-3 py-2 text-left text-xs transition"
-                            :class="
-                                project.projectId === generatorProjectId
-                                    ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
-                                    : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-400 hover:text-cyan-200'
-                            "
-                            @click="handleProjectChange(project.projectId)"
-                        >
-                            <p class="font-medium">{{ project.projectId }}</p>
-                            <p class="mt-1 text-slate-400">
-                                {{ project.fileCount }} files
-                            </p>
-                            <p class="mt-1 text-slate-500">{{ project.running ? "running" : "idle" }}</p>
-                        </button>
-                        <p
-                            v-if="generatorProjects.length === 0"
-                            class="text-xs text-slate-500"
-                        >
-                            No projects yet. Create one to start.
-                        </p>
-                    </div>
+                    <p v-else class="mt-2 text-xs text-slate-500">
+                        CLI path and verify command are hidden by default to keep focus on generation and terminal.
+                    </p>
                 </div>
             </aside>
 
-            <div class="min-w-0 space-y-3">
-                <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3 text-xs text-slate-300">
-                    <p v-if="generatorProject">
-                        Project: <code>{{ generatorProject.projectId }}</code><br />
-                        Path: <code>{{ generatorProject.projectDir }}</code><br />
-                        Updated: <code>{{ formatTime(generatorProject.updatedAt) }}</code><br />
-                        Manifest:
-                        <code>
-                            {{
-                                generatorProject.hasManifest
-                                    ? `${generatorProject.appId ?? "-"} (${generatorProject.version ?? "-"})`
-                                    : "missing app.json"
-                            }}
-                        </code>
+            <div class="min-w-0 space-y-3 xl:flex xl:flex-col">
+                <div
+                    class="rounded-xl border border-slate-700 bg-gradient-to-br from-slate-950/90 via-slate-900/75 to-slate-950/85 p-3"
+                >
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                Project Snapshot
+                            </p>
+                            <p class="mt-1 text-xs text-slate-500">
+                                Keep essentials visible, expand details only when needed.
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            class="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200"
+                            :disabled="!selectedProjectSummary"
+                            @click="showProjectMetaDetails = !showProjectMetaDetails"
+                        >
+                            {{ showProjectMetaDetails ? "Hide Details" : "Show Details" }}
+                        </button>
+                    </div>
+                    <p v-if="!selectedProjectSummary" class="mt-2 text-xs text-slate-400">
+                        Select or create a project.
                     </p>
-                    <p v-else>Select or create a project.</p>
-                </div>
-
-                <div class="grid gap-3 lg:grid-cols-2">
-                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                        <div class="flex items-center justify-between gap-2">
-                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                Validation
-                            </p>
-                            <span
-                                class="rounded-md px-2 py-1 text-[11px]"
-                                :class="
-                                    generatorValidationStatus === 'success'
-                                        ? 'bg-emerald-500/20 text-emerald-200'
-                                        : generatorValidationStatus === 'error'
-                                          ? 'bg-rose-500/20 text-rose-200'
-                                          : generatorValidationStatus === 'loading'
-                                            ? 'bg-amber-500/20 text-amber-200'
-                                            : 'bg-slate-800 text-slate-300'
-                                "
-                            >
-                                {{ generatorValidationStatus }}
-                            </span>
-                        </div>
-                        <p class="mt-1 text-[11px] text-slate-500">
-                            {{ generatorValidationMessage }}
-                        </p>
-                        <div
-                            v-if="generatorValidationResult"
-                            class="mt-2 space-y-1 text-[11px] text-slate-300"
+                    <div v-else class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                        <span class="rounded-md bg-slate-800 px-2 py-1 text-slate-200">
+                            Files {{ selectedProjectSummary.fileCount }}
+                        </span>
+                        <span
+                            class="rounded-md px-2 py-1"
+                            :class="
+                                selectedProjectSummary.running
+                                    ? 'bg-emerald-500/20 text-emerald-200'
+                                    : 'bg-slate-800 text-slate-300'
+                            "
                         >
-                            <p>
-                                Errors: {{ generatorValidationResult.errors.length }} · Warnings:
-                                {{ generatorValidationResult.warnings.length }}
-                            </p>
-                            <p v-if="generatorValidationResult.errors.length > 0" class="text-rose-200">
-                                {{ generatorValidationResult.errors[0].message }}
-                            </p>
-                            <p
-                                v-else-if="generatorValidationResult.warnings.length > 0"
-                                class="text-amber-200"
-                            >
-                                {{ generatorValidationResult.warnings[0].message }}
-                            </p>
-                            <p v-else class="text-emerald-200">
-                                No blocking validation issues.
-                            </p>
-                        </div>
+                            {{ selectedProjectSummary.running ? "running" : "idle" }}
+                        </span>
+                        <span class="rounded-md bg-slate-800 px-2 py-1 text-slate-300">
+                            Updated {{ formatTime(selectedProjectSummary.updatedAt) }}
+                        </span>
+                        <span class="rounded-md bg-slate-800 px-2 py-1 text-slate-300">
+                            Manifest {{ manifestSummary }}
+                        </span>
                     </div>
-
-                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                        <div class="flex items-center justify-between gap-2">
-                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                Verify
-                            </p>
-                            <span
-                                class="rounded-md px-2 py-1 text-[11px]"
-                                :class="
-                                    generatorVerifyStatus === 'success'
-                                        ? 'bg-emerald-500/20 text-emerald-200'
-                                        : generatorVerifyStatus === 'error'
-                                          ? 'bg-rose-500/20 text-rose-200'
-                                          : generatorVerifyStatus === 'loading'
-                                            ? 'bg-amber-500/20 text-amber-200'
-                                            : 'bg-slate-800 text-slate-300'
-                                "
-                            >
-                                {{ generatorVerifyStatus }}
-                            </span>
-                        </div>
-                        <p class="mt-1 text-[11px] text-slate-500">
-                            {{ generatorVerifyMessage }}
+                    <div
+                        v-if="showProjectMetaDetails && selectedProjectSummary"
+                        class="mt-3 rounded-lg border border-slate-800 bg-slate-950/70 p-2 text-xs text-slate-300"
+                    >
+                        <p>Project: <code>{{ selectedProjectSummary.projectId }}</code></p>
+                        <p class="mt-1">Path: <code>{{ selectedProjectSummary.projectDir }}</code></p>
+                        <p class="mt-1">
+                            App:
+                            <code>{{ selectedProjectSummary.appName ?? selectedProjectSummary.appId ?? "-" }}</code>
                         </p>
-                        <div
-                            v-if="generatorVerifyResult"
-                            class="mt-2 space-y-1 text-[11px] text-slate-300"
-                        >
-                            <p>
-                                Cmd: <code>{{ generatorVerifyResult.command }}</code>
-                            </p>
-                            <p>
-                                Exit: <code>{{ generatorVerifyResult.exitCode ?? "-" }}</code> ·
-                                Duration: <code>{{ generatorVerifyResult.durationMs }}ms</code>
-                            </p>
-                            <pre class="max-h-24 overflow-auto whitespace-pre-wrap rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-400">{{
-                                generatorVerifyResult.output || "(no output)"
-                            }}</pre>
-                        </div>
+                        <p class="mt-1">Version: <code>{{ selectedProjectSummary.version ?? "-" }}</code></p>
                     </div>
                 </div>
 
-                <div class="grid gap-3 lg:grid-cols-[minmax(260px,0.78fr)_minmax(0,2.22fr)]">
-                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                            Files
-                        </p>
-                        <div class="mt-2 max-h-[clamp(320px,48vh,680px)] space-y-1 overflow-auto pr-1">
-                            <button
-                                v-for="row in generatorTreeRows"
-                                :key="`generator-entry-${row.node.path}`"
-                                type="button"
-                                class="w-full rounded-md border px-2 py-1.5 text-left text-xs transition"
-                                :class="
-                                    row.node.type === 'directory'
-                                        ? 'border-slate-700/80 bg-slate-900/40 text-slate-400'
-                                        : row.node.path === generatorFilePath
-                                          ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
-                                          : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-400 hover:text-cyan-200'
-                                "
-                                @click="
-                                    row.node.type === 'directory'
-                                        ? toggleDirectory(row.node.path)
-                                        : handleFileOpen(row.node.path)
-                                "
+                <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+                    <div class="grid gap-3 lg:grid-cols-2">
+                        <div class="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+                            <div class="flex items-center justify-between gap-2">
+                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                    Validation
+                                </p>
+                                <div class="flex items-center gap-2">
+                                    <span
+                                        class="rounded-md px-2 py-1 text-[11px]"
+                                        :class="validationStatusClass"
+                                    >
+                                        {{ generatorValidationStatus }}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        class="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                        :disabled="!generatorValidationResult"
+                                        @click="showValidationDetails = !showValidationDetails"
+                                    >
+                                        {{ showValidationDetails ? "Hide" : "Show" }}
+                                    </button>
+                                </div>
+                            </div>
+                            <p class="mt-1 text-[11px] text-slate-300">
+                                {{ validationSummary }}
+                            </p>
+                            <p class="mt-1 text-[11px] text-slate-500">
+                                {{ generatorValidationMessage }}
+                            </p>
+                            <div
+                                v-if="showValidationDetails && generatorValidationResult"
+                                class="mt-2 space-y-1 text-[11px] text-slate-300"
                             >
-                                <span
-                                    class="inline-block"
-                                    :style="{ paddingLeft: `${row.depth * 12}px` }"
+                                <p>
+                                    Errors: {{ generatorValidationResult.errors.length }} · Warnings:
+                                    {{ generatorValidationResult.warnings.length }} · Checks:
+                                    {{ generatorValidationResult.checks.length }}
+                                </p>
+                                <p
+                                    v-if="generatorValidationResult.errors.length > 0"
+                                    class="text-rose-200"
                                 >
-                                    <span v-if="row.node.type === 'directory'">
-                                        {{ row.hasChildren ? (row.expanded ? "[-]" : "[+]") : "[ ]" }}
-                                        {{ row.node.name }}
+                                    {{ generatorValidationResult.errors[0].message }}
+                                </p>
+                                <p
+                                    v-else-if="generatorValidationResult.warnings.length > 0"
+                                    class="text-amber-200"
+                                >
+                                    {{ generatorValidationResult.warnings[0].message }}
+                                </p>
+                                <p v-else class="text-emerald-200">
+                                    No blocking validation issues.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+                            <div class="flex items-center justify-between gap-2">
+                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                    Verify
+                                </p>
+                                <div class="flex items-center gap-2">
+                                    <span
+                                        class="rounded-md px-2 py-1 text-[11px]"
+                                        :class="verifyStatusClass"
+                                    >
+                                        {{ generatorVerifyStatus }}
                                     </span>
-                                    <span v-else>
-                                        [F] {{ row.node.name }}
-                                    </span>
-                                </span>
-                            </button>
-                            <p
-                                v-if="generatorTreeRows.length === 0"
-                                class="text-xs text-slate-500"
-                            >
-                                Select a project to browse files.
+                                    <button
+                                        type="button"
+                                        class="rounded-md border border-slate-600 px-2 py-1 text-[11px] text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                        :disabled="!generatorVerifyResult"
+                                        @click="showVerifyDetails = !showVerifyDetails"
+                                    >
+                                        {{ showVerifyDetails ? "Hide" : "Show" }}
+                                    </button>
+                                </div>
+                            </div>
+                            <p class="mt-1 text-[11px] text-slate-300">
+                                {{ verifySummary }}
                             </p>
+                            <p class="mt-1 text-[11px] text-slate-500">
+                                {{ generatorVerifyMessage }}
+                            </p>
+                            <div
+                                v-if="showVerifyDetails && generatorVerifyResult"
+                                class="mt-2 space-y-1 text-[11px] text-slate-300"
+                            >
+                                <p>
+                                    Cmd: <code>{{ generatorVerifyResult.command }}</code>
+                                </p>
+                                <p>
+                                    Exit: <code>{{ generatorVerifyResult.exitCode ?? "-" }}</code> ·
+                                    Duration: <code>{{ generatorVerifyResult.durationMs }}ms</code>
+                                </p>
+                                <pre class="no-scrollbar max-h-28 overflow-auto whitespace-pre-wrap rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-400">{{
+                                    generatorVerifyResult.output || "(no output)"
+                                }}</pre>
+                            </div>
                         </div>
                     </div>
+                </div>
 
-                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
-                        <div class="flex flex-wrap items-center justify-between gap-2">
-                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                File Content
-                            </p>
-                            <span class="text-xs text-slate-500">
-                                {{ generatorFileLoading ? "Loading..." : generatorFilePath || "-" }}
-                            </span>
-                        </div>
-                        <pre class="mt-2 max-h-[clamp(320px,48vh,680px)] overflow-auto whitespace-pre-wrap text-xs text-slate-200">{{
-                            generatorFileContent || "Select a file to view its content."
-                        }}</pre>
-                        <p
-                            v-if="generatorFileTruncated"
-                            class="mt-2 text-xs text-amber-300"
-                        >
-                            File content is truncated due to size limit.
+                <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                            Project Workspace
                         </p>
+                        <span class="text-[11px] text-slate-500">
+                            Tree + file content
+                        </span>
+                    </div>
+                    <div class="mt-2 grid gap-3 lg:grid-cols-[minmax(240px,0.76fr)_minmax(0,2.24fr)]">
+                        <div class="flex h-[clamp(320px,38vh,500px)] min-h-0 flex-col rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+                            <p class="text-xs font-medium text-slate-300">Files</p>
+                            <div class="no-scrollbar mt-2 min-h-0 flex-1 space-y-1 overflow-auto pr-1">
+                                <button
+                                    v-for="row in generatorTreeRows"
+                                    :key="`generator-entry-${row.node.path}`"
+                                    type="button"
+                                    class="w-full rounded-md border px-2 py-1.5 text-left text-xs transition"
+                                    :class="
+                                        row.node.type === 'directory'
+                                            ? 'border-slate-700/80 bg-slate-900/40 text-slate-400'
+                                            : row.node.path === generatorFilePath
+                                              ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200'
+                                              : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-400 hover:text-cyan-200'
+                                    "
+                                    @click="
+                                        row.node.type === 'directory'
+                                            ? toggleDirectory(row.node.path)
+                                            : handleFileOpen(row.node.path)
+                                    "
+                                >
+                                    <span
+                                        class="inline-block"
+                                        :style="{ paddingLeft: `${row.depth * 12}px` }"
+                                    >
+                                        <span v-if="row.node.type === 'directory'">
+                                            {{ row.hasChildren ? (row.expanded ? "[-]" : "[+]") : "[ ]" }}
+                                            {{ row.node.name }}
+                                        </span>
+                                        <span v-else>
+                                            [F] {{ row.node.name }}
+                                        </span>
+                                    </span>
+                                </button>
+                                <p
+                                    v-if="generatorTreeRows.length === 0"
+                                    class="text-xs text-slate-500"
+                                >
+                                    Select a project to browse files.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="flex h-[clamp(320px,38vh,500px)] min-h-0 flex-col rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+                            <div class="flex flex-wrap items-center justify-between gap-2">
+                                <p class="text-xs font-medium text-slate-300">
+                                    File Content
+                                </p>
+                                <span class="text-xs text-slate-500">
+                                    {{ generatorFileLoading ? "Loading..." : generatorFilePath || "-" }}
+                                </span>
+                            </div>
+                            <pre class="no-scrollbar mt-2 min-h-0 flex-1 overflow-auto whitespace-pre-wrap text-xs text-slate-200">{{
+                                generatorFileContent || "Select a file to view its content."
+                            }}</pre>
+                            <p
+                                v-if="generatorFileTruncated"
+                                class="mt-2 text-xs text-amber-300"
+                            >
+                                File content is truncated due to size limit.
+                            </p>
+                        </div>
                     </div>
                 </div>
 
             </div>
         </div>
 
-        <div class="mt-3 rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+        <div class="mt-4 rounded-2xl border border-slate-700 bg-slate-950/85 p-4 shadow-soft">
             <div class="flex flex-wrap items-center justify-between gap-2">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Embedded Terminal
-                </p>
+                <div>
+                    <p class="text-sm font-medium text-slate-100">Embedded Terminal</p>
+                    <p class="mt-1 text-[11px] text-slate-500">
+                        Core workspace for Claude CLI session. Keep this area primary.
+                    </p>
+                </div>
                 <div class="flex items-center gap-2">
                     <span
                         class="rounded-md px-2 py-1 text-[11px]"
-                        :class="
-                            generatorTerminal.running
-                                ? 'bg-emerald-500/20 text-emerald-200'
-                                : 'bg-slate-800 text-slate-300'
-                        "
+                        :class="terminalRunningClass"
                     >
                         {{ generatorTerminal.running ? "running" : "stopped" }}
                     </span>
@@ -778,25 +956,17 @@ watch(
                     </button>
                 </div>
             </div>
-            <p class="mt-1 text-[11px] text-slate-500">
+            <p class="mt-2 text-[11px] text-slate-500">
                 {{ generatorTerminal.shellCommand || "-" }}
             </p>
             <div
                 ref="terminalHost"
-                class="mt-2 h-[clamp(340px,40vh,620px)] overflow-hidden rounded-md border border-slate-700 bg-slate-950"
+                class="mt-3 h-[clamp(420px,52vh,760px)] overflow-hidden rounded-md border border-slate-700 bg-slate-950"
             />
             <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
                 <span
                     class="rounded-md px-2 py-1"
-                    :class="
-                        generatorTerminalStatus === 'success'
-                            ? 'bg-emerald-500/20 text-emerald-200'
-                            : generatorTerminalStatus === 'error'
-                              ? 'bg-rose-500/20 text-rose-200'
-                              : generatorTerminalStatus === 'loading'
-                                ? 'bg-amber-500/20 text-amber-200'
-                                : 'bg-slate-800 text-slate-300'
-                    "
+                    :class="terminalStatusClass"
                 >
                     {{ generatorTerminalStatus }}
                 </span>
@@ -804,18 +974,10 @@ watch(
             </div>
         </div>
 
-        <div class="mt-4 flex flex-wrap items-center gap-3 text-xs">
+        <div class="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs">
             <span
                 class="rounded-md px-2 py-1"
-                :class="
-                    generatorStatus === 'success'
-                        ? 'bg-emerald-500/20 text-emerald-200'
-                        : generatorStatus === 'error'
-                          ? 'bg-rose-500/20 text-rose-200'
-                          : generatorStatus === 'loading'
-                            ? 'bg-amber-500/20 text-amber-200'
-                            : 'bg-slate-800 text-slate-300'
-                "
+                :class="generatorStatusClass"
             >
                 {{ generatorStatus }}
             </span>
