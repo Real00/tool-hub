@@ -70,3 +70,6 @@ PRs should include:
 2. Affected paths (for example `src/platform/electron-bridge.ts`).
 3. Validation steps/commands run.
 4. Screenshots or short recording for UI changes.
+
+## Skills
+- `tool-hub-release-workflow`: Tool Hub 版本发布流程技能，用于整理版本范围、更新 `package.json` + `CHANGELOG.md`、执行发布前校验、打标签并触发 CI 发布。（file: `skills/tool-hub-release-workflow/SKILL.md`）

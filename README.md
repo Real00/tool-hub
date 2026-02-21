@@ -4,7 +4,7 @@
 
 ## Changelog
 
-- 本次发布变更见 `CHANGELOG.md`（当前版本：`0.1.2`）。
+- 本次发布变更见 `CHANGELOG.md`（当前版本：`0.1.3`）。
 
 ## Start
 
