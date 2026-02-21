@@ -95,6 +95,34 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   getAppLogs(appId) {
     return ipcRenderer.invoke("apps:get-logs", appId);
   },
+  getAppRuns(appId, limit) {
+    return ipcRenderer.invoke("apps:get-runs", appId, limit);
+  },
+  updateAppTab(appId, tabId) {
+    return ipcRenderer.invoke("apps:update-tab", appId, tabId);
+  },
+  batchStopApps(appIds) {
+    return ipcRenderer.invoke("apps:batch-stop", appIds);
+  },
+  batchRemoveApps(appIds) {
+    return ipcRenderer.invoke("apps:batch-remove", appIds);
+  },
+  subscribeAppLogs(appId, callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const listener = (_event, payload) => {
+      if (payload?.appId === appId) {
+        callback(payload);
+      }
+    };
+    ipcRenderer.on("apps:log-event", listener);
+    ipcRenderer.send("apps:logs-subscribe", appId);
+    return () => {
+      ipcRenderer.send("apps:logs-unsubscribe", appId);
+      ipcRenderer.removeListener("apps:log-event", listener);
+    };
+  },
   removeApp(appId) {
     return ipcRenderer.invoke("apps:remove", appId);
   },

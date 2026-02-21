@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { AppsRootInfo, InstalledApp } from "./types/app";
+import type { AppLogEvent, AppRunRecord, AppsRootInfo, InstalledApp } from "./types/app";
 import type {
   ClaudeCliDetectionResult,
   GeneratorInstallResult,
@@ -68,7 +68,15 @@ declare global {
     ) => Promise<InstalledApp[]>;
     startApp: (appId: string) => Promise<InstalledApp[]>;
     stopApp: (appId: string) => Promise<InstalledApp[]>;
+    batchStopApps: (appIds: string[]) => Promise<InstalledApp[]>;
     getAppLogs: (appId: string) => Promise<string[]>;
+    getAppRuns: (appId: string, limit?: number) => Promise<AppRunRecord[]>;
+    updateAppTab: (appId: string, tabId: string) => Promise<InstalledApp[]>;
+    batchRemoveApps: (appIds: string[]) => Promise<InstalledApp[]>;
+    subscribeAppLogs: (
+      appId: string,
+      callback: (event: AppLogEvent) => void,
+    ) => () => void;
     removeApp: (appId: string) => Promise<InstalledApp[]>;
     openAppWindow: (appId: string, launchPayload?: string) => Promise<boolean>;
     pickInstallDirectory: () => Promise<string | null>;

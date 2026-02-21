@@ -1,17 +1,16 @@
 <script setup lang="ts">
+import { useRouter } from "vue-router";
 import { useToolHubState } from "../composables/use-tool-hub-state";
 
-const {
-    activeTabLabel,
-    appLogs,
-    appsInActiveTab,
-    loadAppLogs,
-    logsAppName,
-    logsStatus,
-    openNodeAppWindow,
-    removeNodeApp,
-    stopNodeApp,
-} = useToolHubState();
+const router = useRouter();
+const { activeTabLabel, appsInActiveTab, openNodeAppWindow, removeNodeApp, stopNodeApp } = useToolHubState();
+
+function openRuntimePage(appId: string) {
+    void router.push({
+        name: "runtime",
+        query: { appId },
+    });
+}
 </script>
 
 <template>
@@ -81,9 +80,9 @@ const {
                 <button
                     type="button"
                     class="rounded-md border border-slate-600 px-2.5 py-1.5 text-xs transition hover:border-cyan-400 hover:text-cyan-200"
-                    @click="loadAppLogs(appItem.id)"
+                    @click="openRuntimePage(appItem.id)"
                 >
-                    Logs
+                    Runtime
                 </button>
                 <button
                     type="button"
@@ -101,31 +100,5 @@ const {
             No apps bound to this tab yet. Install an app to this tab from
             Settings and refresh apps.
         </article>
-    </section>
-
-    <section
-        class="mt-6 rounded-xl border border-slate-700 bg-slate-950/80 p-4"
-    >
-        <div class="flex items-center justify-between">
-            <p class="text-sm font-medium text-slate-100">
-                Runtime logs {{ logsAppName ? `(${logsAppName})` : "" }}
-            </p>
-            <span
-                class="rounded-md px-2 py-1 text-xs"
-                :class="
-                    logsStatus === 'error'
-                        ? 'bg-rose-500/20 text-rose-200'
-                        : logsStatus === 'loading'
-                          ? 'bg-amber-500/20 text-amber-200'
-                          : 'bg-slate-800 text-slate-300'
-                "
-            >
-                {{ logsStatus }}
-            </span>
-        </div>
-        <pre
-            class="mt-3 max-h-56 overflow-auto whitespace-pre-wrap text-xs text-slate-300"
-            >{{ appLogs.join("\n") || "No logs selected." }}</pre
-        >
     </section>
 </template>

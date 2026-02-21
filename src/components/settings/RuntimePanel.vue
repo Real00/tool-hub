@@ -29,6 +29,12 @@ const canDownloadUpdate = computed(() => updateState.value.status === "available
 const canInstallUpdate = computed(() => updateState.value.status === "downloaded");
 const isCheckingUpdate = computed(() => updateState.value.status === "checking");
 const isDownloadingUpdate = computed(() => updateState.value.status === "downloading");
+const releaseDateText = computed(() => {
+    if (!updateState.value.releaseDate) {
+        return "";
+    }
+    return new Date(updateState.value.releaseDate).toLocaleString();
+});
 const updateProgressText = computed(() => {
     const progress = updateState.value.progress;
     if (!progress) {
@@ -191,6 +197,16 @@ const updateProgressText = computed(() => {
             </span>
         </div>
         <p class="mt-2 text-xs text-slate-400">{{ updateState.message }}</p>
+        <p
+            v-if="releaseDateText"
+            class="mt-1 text-xs text-slate-400"
+        >
+            Release date: {{ releaseDateText }}
+        </p>
+        <pre
+            v-if="updateState.releaseNotes"
+            class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md border border-slate-800 bg-slate-950/60 px-2 py-2 text-[11px] text-slate-400"
+        >{{ updateState.releaseNotes }}</pre>
         <div class="mt-2 flex flex-wrap items-center gap-2">
             <button
                 type="button"

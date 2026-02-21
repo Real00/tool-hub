@@ -1,14 +1,17 @@
 import { computed, ref } from "vue";
 import { useGeneratorSession } from "./use-generator-session";
 import { defaultTabs } from "../config/settings";
-import type { AppsRootInfo, InstalledApp } from "../types/app";
+import type { AppRunRecord, AppsRootInfo, InstalledApp } from "../types/app";
 import type { TabDefinition } from "../types/settings";
 import type { UpdateState } from "../types/update";
 import {
+  batchRemoveApps as batchRemoveAppsBridge,
+  batchStopApps as batchStopAppsBridge,
   backupConfiguration,
   checkForUpdates as checkForUpdatesBridge,
   downloadUpdate as downloadUpdateBridge,
   getAppLogs,
+  getAppRuns as getAppRunsBridge,
   getAppsRoot,
   getSettingsTabs,
   getUpdateState as getUpdateStateBridge,
@@ -27,7 +30,9 @@ import {
   saveSettingsTabs,
   startApp,
   stopApp,
+  subscribeAppLogs as subscribeAppLogsBridge,
   subscribeUpdateEvents,
+  updateAppTab as updateAppTabBridge,
 } from "../platform/electron-bridge";
 
 function formatError(error: unknown): string {
@@ -38,6 +43,8 @@ function formatError(error: unknown): string {
 }
 
 const APP_ALREADY_INSTALLED_PREFIX = "APP_ALREADY_INSTALLED:";
+const MAX_RENDERED_LOG_LINES = 400;
+const APP_RUN_HISTORY_LIMIT = 40;
 
 function parseAlreadyInstalledAppId(error: unknown): string | null {
   const message = formatError(error).trim();
@@ -139,11 +146,14 @@ function createToolHubState() {
   const logsStatus = ref<"idle" | "loading" | "success" | "error">("idle");
   const appLogs = ref<string[]>([]);
   const logsAppId = ref<string | null>(null);
+  const appRuns = ref<AppRunRecord[]>([]);
+  const runsStatus = ref<"idle" | "loading" | "success" | "error">("idle");
 
   let appsPollingTimer: ReturnType<typeof setInterval> | null = null;
   let appsInitialLoadTimer: ReturnType<typeof setTimeout> | null = null;
   let bridgeAndTabsLoadTimer: ReturnType<typeof setTimeout> | null = null;
   let detachUpdateSubscription: (() => void) | null = null;
+  let detachAppLogsSubscription: (() => void) | null = null;
   let initialized = false;
 
   const {
@@ -206,6 +216,32 @@ function createToolHubState() {
     );
   });
 
+  function detachAppLogStreaming() {
+    detachAppLogsSubscription?.();
+    detachAppLogsSubscription = null;
+  }
+
+  function appendAppLogLine(line: string) {
+    appLogs.value.push(line);
+    if (appLogs.value.length > MAX_RENDERED_LOG_LINES) {
+      appLogs.value.splice(0, appLogs.value.length - MAX_RENDERED_LOG_LINES);
+    }
+  }
+
+  function attachAppLogStreaming(appId: string) {
+    detachAppLogStreaming();
+    if (!isElectronRuntime()) {
+      return;
+    }
+    detachAppLogsSubscription = subscribeAppLogsBridge(appId, (event) => {
+      if (logsAppId.value !== appId) {
+        return;
+      }
+      appendAppLogLine(event.line);
+      logsStatus.value = "success";
+    });
+  }
+
   function applyTabs(input: TabDefinition[]) {
     const normalized = normalizeTabs(input);
     tabs.value = normalized.length > 0 ? normalized : cloneTabs(defaultTabs);
@@ -255,6 +291,12 @@ function createToolHubState() {
       appsRootInfo.value = null;
       appsStatus.value = "idle";
       appsMessage.value = "Browser mode: Node apps are unavailable.";
+      detachAppLogStreaming();
+      appLogs.value = [];
+      logsAppId.value = null;
+      logsStatus.value = "idle";
+      appRuns.value = [];
+      runsStatus.value = "idle";
       return;
     }
 
@@ -263,6 +305,17 @@ function createToolHubState() {
       const [rootInfo, list] = await Promise.all([getAppsRoot(), listApps()]);
       appsRootInfo.value = rootInfo;
       applyApps(list);
+      if (
+        logsAppId.value &&
+        !list.some((appItem) => appItem.id === logsAppId.value)
+      ) {
+        detachAppLogStreaming();
+        appLogs.value = [];
+        logsAppId.value = null;
+        logsStatus.value = "idle";
+        appRuns.value = [];
+        runsStatus.value = "idle";
+      }
       appsStatus.value = "success";
       appsMessage.value = `Found ${list.length} app(s).`;
     } catch (error) {
@@ -457,6 +510,7 @@ function createToolHubState() {
 
     restoreStatus.value = "loading";
     restoreMessage.value = "Restoring from backup ZIP...";
+    detachAppLogStreaming();
     const shouldResumePolling = !!appsPollingTimer;
     if (appsPollingTimer) {
       clearInterval(appsPollingTimer);
@@ -726,9 +780,12 @@ function createToolHubState() {
       const list = await removeApp(appId);
       applyApps(list);
       if (logsAppId.value === appId) {
+        detachAppLogStreaming();
         logsAppId.value = null;
         appLogs.value = [];
         logsStatus.value = "idle";
+        appRuns.value = [];
+        runsStatus.value = "idle";
       }
       appsStatus.value = "success";
       appsMessage.value = `App removed: ${appId}`;
@@ -769,23 +826,151 @@ function createToolHubState() {
     }
   }
 
-  async function loadAppLogs(appId?: string | null) {
-    const targetAppId = appId ?? logsAppId.value;
-    if (!targetAppId || !isElectronRuntime()) {
-      appLogs.value = [];
-      logsAppId.value = null;
+  async function updateNodeAppTab(appId: string, tabId: string) {
+    if (!isElectronRuntime()) {
+      appsStatus.value = "error";
+      appsMessage.value = "Tab update is only available in Electron runtime.";
       return;
     }
 
+    const normalizedTabId = normalizeTabId(tabId);
+    if (!normalizedTabId) {
+      appsStatus.value = "error";
+      appsMessage.value = "Please choose a valid tab.";
+      return;
+    }
+
+    appsStatus.value = "loading";
+    appsMessage.value = `Updating tab for app "${appId}"...`;
+    try {
+      const list = await updateAppTabBridge(appId, normalizedTabId);
+      applyApps(list);
+      appsStatus.value = "success";
+      appsMessage.value = `Updated app tab: ${appId} -> ${normalizedTabId}`;
+    } catch (error) {
+      appsStatus.value = "error";
+      appsMessage.value = `Update tab failed: ${formatError(error)}`;
+    }
+  }
+
+  async function batchStopNodeApps(appIds: string[]) {
+    if (!isElectronRuntime()) {
+      appsStatus.value = "error";
+      appsMessage.value = "Batch stop is only available in Electron runtime.";
+      return;
+    }
+
+    const targets = Array.from(
+      new Set(appIds.map((item) => item.trim()).filter(Boolean)),
+    );
+    if (targets.length === 0) {
+      return;
+    }
+
+    appsStatus.value = "loading";
+    appsMessage.value = `Stopping ${targets.length} app(s)...`;
+    try {
+      const list = await batchStopAppsBridge(targets);
+      applyApps(list);
+      appsStatus.value = "success";
+      appsMessage.value = `Stopped ${targets.length} app(s).`;
+      if (logsAppId.value && targets.includes(logsAppId.value)) {
+        await loadAppRuns(logsAppId.value);
+      }
+    } catch (error) {
+      appsStatus.value = "error";
+      appsMessage.value = `Batch stop failed: ${formatError(error)}`;
+    }
+  }
+
+  async function batchRemoveNodeApps(appIds: string[]) {
+    if (!isElectronRuntime()) {
+      appsStatus.value = "error";
+      appsMessage.value = "Batch remove is only available in Electron runtime.";
+      return;
+    }
+
+    const targets = Array.from(
+      new Set(appIds.map((item) => item.trim()).filter(Boolean)),
+    );
+    if (targets.length === 0) {
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Remove ${targets.length} app(s)? This will delete their folders from apps root.`,
+      )
+    ) {
+      return;
+    }
+
+    appsStatus.value = "loading";
+    appsMessage.value = `Removing ${targets.length} app(s)...`;
+    try {
+      const list = await batchRemoveAppsBridge(targets);
+      applyApps(list);
+      if (logsAppId.value && targets.includes(logsAppId.value)) {
+        detachAppLogStreaming();
+        logsAppId.value = null;
+        appLogs.value = [];
+        logsStatus.value = "idle";
+        appRuns.value = [];
+        runsStatus.value = "idle";
+      }
+      appsStatus.value = "success";
+      appsMessage.value = `Removed ${targets.length} app(s).`;
+    } catch (error) {
+      appsStatus.value = "error";
+      appsMessage.value = `Batch remove failed: ${formatError(error)}`;
+    }
+  }
+
+  async function loadAppRuns(appId?: string | null) {
+    const targetAppId = appId ?? logsAppId.value;
+    if (!targetAppId || !isElectronRuntime()) {
+      appRuns.value = [];
+      runsStatus.value = "idle";
+      return;
+    }
+
+    runsStatus.value = "loading";
+    try {
+      appRuns.value = await getAppRunsBridge(targetAppId, APP_RUN_HISTORY_LIMIT);
+      runsStatus.value = "success";
+    } catch (error) {
+      runsStatus.value = "error";
+      appRuns.value = [];
+      if (logsStatus.value === "success") {
+        appsMessage.value = `Run history load failed: ${formatError(error)}`;
+      }
+    }
+  }
+
+  async function loadAppLogs(appId?: string | null) {
+    const targetAppId = appId ?? logsAppId.value;
+    if (!targetAppId || !isElectronRuntime()) {
+      detachAppLogStreaming();
+      appLogs.value = [];
+      logsAppId.value = null;
+      logsStatus.value = "idle";
+      appRuns.value = [];
+      runsStatus.value = "idle";
+      return;
+    }
+
+    detachAppLogStreaming();
     logsAppId.value = targetAppId;
     logsStatus.value = "loading";
     try {
       appLogs.value = await getAppLogs(targetAppId);
       logsStatus.value = "success";
+      attachAppLogStreaming(targetAppId);
     } catch (error) {
       logsStatus.value = "error";
       appLogs.value = [`Log load failed: ${formatError(error)}`];
     }
+    await loadAppRuns(targetAppId);
   }
 
   function toggleOverview() {
@@ -798,9 +983,6 @@ function createToolHubState() {
     }
     appsPollingTimer = setInterval(() => {
       void loadAppsData();
-      if (logsAppId.value) {
-        void loadAppLogs(logsAppId.value);
-      }
     }, 4000);
   }
 
@@ -853,6 +1035,7 @@ function createToolHubState() {
     }
     detachUpdateSubscription?.();
     detachUpdateSubscription = null;
+    detachAppLogStreaming();
     detachGeneratorTerminalSubscription();
   }
 
@@ -861,6 +1044,7 @@ function createToolHubState() {
     activeTabLabel,
     addTabRow,
     appLogs,
+    appRuns,
     apps,
     appsInActiveTab,
     appsMessage,
@@ -873,6 +1057,8 @@ function createToolHubState() {
     backupStatus,
     bridgeMessage,
     bridgeStatus,
+    batchRemoveNodeApps,
+    batchStopNodeApps,
     checkForAppUpdates,
     systemAppsMessage,
     systemAppsStatus,
@@ -904,6 +1090,7 @@ function createToolHubState() {
     installSourceDir,
     installTabId,
     loadAppLogs,
+    loadAppRuns,
     loadAppsData,
     loadGeneratorProjects,
     loadGeneratorSettingsFromStorage,
@@ -921,6 +1108,7 @@ function createToolHubState() {
     restoreConfigData,
     restoreMessage,
     restoreStatus,
+    runsStatus,
     runtimeLabel,
     loadUpdateState,
     refreshSystemAppsData,
@@ -942,6 +1130,7 @@ function createToolHubState() {
     testElectronBridge,
     toggleOverview,
     updateState,
+    updateNodeAppTab,
   };
 }
 

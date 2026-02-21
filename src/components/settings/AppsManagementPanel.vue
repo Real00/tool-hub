@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, ref, watch } from "vue";
 import { useToolHubState } from "../../composables/use-tool-hub-state";
 
 const {
@@ -6,6 +7,8 @@ const {
     appsMessage,
     appsRootInfo,
     appsStatus,
+    batchRemoveNodeApps,
+    batchStopNodeApps,
     chooseInstallDirectory,
     initializeAppsDb,
     installNodeApp,
@@ -16,7 +19,116 @@ const {
     removeNodeApp,
     stopNodeApp,
     tabs,
+    updateNodeAppTab,
 } = useToolHubState();
+
+const searchText = ref("");
+const statusFilter = ref<"all" | "running" | "stopped">("all");
+const selectedAppIds = ref<Set<string>>(new Set());
+
+const filteredApps = computed(() => {
+    const query = searchText.value.trim().toLowerCase();
+    return apps.value.filter((appItem) => {
+        if (statusFilter.value === "running" && !appItem.running) {
+            return false;
+        }
+        if (statusFilter.value === "stopped" && appItem.running) {
+            return false;
+        }
+        if (!query) {
+            return true;
+        }
+        return (
+            appItem.name.toLowerCase().includes(query) ||
+            appItem.id.toLowerCase().includes(query) ||
+            appItem.tabId.toLowerCase().includes(query)
+        );
+    });
+});
+
+const hasSelection = computed(() => selectedAppIds.value.size > 0);
+const allFilteredSelected = computed(() => {
+    if (filteredApps.value.length === 0) {
+        return false;
+    }
+    return filteredApps.value.every((appItem) => selectedAppIds.value.has(appItem.id));
+});
+
+watch(
+    () => apps.value.map((item) => item.id).join("|"),
+    () => {
+        const validIds = new Set(apps.value.map((item) => item.id));
+        const next = new Set<string>();
+        selectedAppIds.value.forEach((id) => {
+            if (validIds.has(id)) {
+                next.add(id);
+            }
+        });
+        selectedAppIds.value = next;
+    },
+);
+
+function setAppSelected(appId: string, checked: boolean) {
+    const next = new Set(selectedAppIds.value);
+    if (checked) {
+        next.add(appId);
+    } else {
+        next.delete(appId);
+    }
+    selectedAppIds.value = next;
+}
+
+function handleSelectAll(event: Event) {
+    const target = event.target as HTMLInputElement | null;
+    if (!target) {
+        return;
+    }
+    if (!target.checked) {
+        selectedAppIds.value = new Set();
+        return;
+    }
+    selectedAppIds.value = new Set(filteredApps.value.map((item) => item.id));
+}
+
+function handleRowSelectChange(appId: string, event: Event) {
+    const target = event.target as HTMLInputElement | null;
+    if (!target) {
+        return;
+    }
+    setAppSelected(appId, target.checked);
+}
+
+function handleTabChange(appId: string, event: Event) {
+    const target = event.target as HTMLSelectElement | null;
+    if (!target) {
+        return;
+    }
+    void updateNodeAppTab(appId, target.value);
+}
+
+function clearSelection() {
+    selectedAppIds.value = new Set();
+}
+
+function handleBatchStop() {
+    if (!hasSelection.value) {
+        return;
+    }
+    const targets = Array.from(selectedAppIds.value);
+    void batchStopNodeApps(targets).finally(() => {
+        clearSelection();
+    });
+}
+
+function handleBatchRemove() {
+    if (!hasSelection.value) {
+        return;
+    }
+    const targets = Array.from(selectedAppIds.value);
+    void batchRemoveNodeApps(targets).finally(() => {
+        clearSelection();
+    });
+}
 </script>
 
 <template>
@@ -105,6 +217,47 @@ const {
             <span class="text-slate-300">{{ appsMessage }}</span>
         </div>
 
+        <div class="mt-4 grid gap-2 md:grid-cols-[1fr_160px_auto_auto_auto]">
+            <input
+                v-model="searchText"
+                type="text"
+                placeholder="Search by name/id/tab"
+                class="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-500/50 placeholder:text-slate-500 focus:ring"
+            />
+            <select
+                v-model="statusFilter"
+                class="rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-500/50 focus:ring"
+            >
+                <option value="all">All</option>
+                <option value="running">Running</option>
+                <option value="stopped">Stopped</option>
+            </select>
+            <button
+                type="button"
+                class="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!hasSelection"
+                @click="handleBatchStop"
+            >
+                Stop Selected
+            </button>
+            <button
+                type="button"
+                class="rounded-lg border border-rose-500/40 px-3 py-2 text-xs text-rose-200 transition hover:border-rose-400 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!hasSelection"
+                @click="handleBatchRemove"
+            >
+                Remove Selected
+            </button>
+            <button
+                type="button"
+                class="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                :disabled="!hasSelection"
+                @click="clearSelection"
+            >
+                Clear Selection
+            </button>
+        </div>
+
         <div
             class="mt-4 overflow-x-auto rounded-xl border border-slate-700 bg-slate-950/80"
         >
@@ -113,6 +266,14 @@ const {
                     class="border-b border-slate-700 bg-slate-900/70 text-xs uppercase tracking-wide text-slate-400"
                 >
                     <tr>
+                        <th class="px-3 py-2">
+                            <input
+                                type="checkbox"
+                                class="h-3.5 w-3.5 accent-cyan-400"
+                                :checked="allFilteredSelected"
+                                @change="handleSelectAll"
+                            />
+                        </th>
                         <th class="px-3 py-2">Name</th>
                         <th class="px-3 py-2">ID</th>
                         <th class="px-3 py-2">Tab</th>
@@ -123,15 +284,37 @@ const {
                 </thead>
                 <tbody>
                     <tr
-                        v-for="appItem in apps"
+                        v-for="appItem in filteredApps"
                         :key="appItem.id"
                         class="border-b border-slate-800 last:border-b-0"
                     >
+                        <td class="px-3 py-2">
+                            <input
+                                type="checkbox"
+                                class="h-3.5 w-3.5 accent-cyan-400"
+                                :checked="selectedAppIds.has(appItem.id)"
+                                @change="handleRowSelectChange(appItem.id, $event)"
+                            />
+                        </td>
                         <td class="px-3 py-2">{{ appItem.name }}</td>
                         <td class="px-3 py-2 font-mono text-xs">
                             {{ appItem.id }}
                         </td>
-                        <td class="px-3 py-2">{{ appItem.tabId }}</td>
+                        <td class="px-3 py-2">
+                            <select
+                                :value="appItem.tabId"
+                                class="min-w-[160px] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 outline-none ring-cyan-500/50 focus:ring"
+                                @change="handleTabChange(appItem.id, $event)"
+                            >
+                                <option
+                                    v-for="tab in tabs"
+                                    :key="`row-tab-${appItem.id}-${tab.id}`"
+                                    :value="tab.id"
+                                >
+                                    {{ tab.label }} ({{ tab.id }})
+                                </option>
+                            </select>
+                        </td>
                         <td class="px-3 py-2">{{ appItem.version }}</td>
                         <td class="px-3 py-2">
                             <span
@@ -176,12 +359,12 @@ const {
                             </div>
                         </td>
                     </tr>
-                    <tr v-if="apps.length === 0">
+                    <tr v-if="filteredApps.length === 0">
                         <td
-                            colspan="6"
+                            colspan="7"
                             class="px-3 py-4 text-center text-slate-500"
                         >
-                            No apps discovered in the user apps directory.
+                            No apps match current filter.
                         </td>
                     </tr>
                 </tbody>

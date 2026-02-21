@@ -14,6 +14,7 @@ let unsubscribeQuickLauncherRequest: (() => void) | null = null;
 
 const isSettingsRoute = computed(() => route.name === "settings");
 const isGeneratorRoute = computed(() => route.name === "generator");
+const isRuntimeRoute = computed(() => route.name === "runtime");
 const isQuickLauncherRoute = computed(() => route.name === "quick-launcher");
 
 function handleTabSelect(tabId: string) {
@@ -29,6 +30,14 @@ function handleGeneratorToggle() {
         return;
     }
     void router.push({ name: "generator" });
+}
+
+function handleRuntimeToggle() {
+    if (isRuntimeRoute.value) {
+        void router.push({ name: "workspace" });
+        return;
+    }
+    void router.push({ name: "runtime" });
 }
 
 function handleSettingsToggle() {
@@ -90,9 +99,11 @@ onUnmounted(() => {
             :active-tab="activeTab"
             :is-settings-active="isSettingsRoute"
             :is-generator-active="isGeneratorRoute"
+            :is-runtime-active="isRuntimeRoute"
             :installed-apps="apps"
             @select="handleTabSelect"
             @generator="handleGeneratorToggle"
+            @runtime="handleRuntimeToggle"
             @settings="handleSettingsToggle"
         />
 

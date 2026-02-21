@@ -72,6 +72,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const bootTraceEnabled = process.env.TOOL_HUB_BOOT_LOG === "1";
 const bootStartAt = Date.now();
 const APP_RUNTIME_LAUNCH_PAYLOAD_CHANNEL = "app-runtime:launch-payload";
+const APP_LOG_EVENT_CHANNEL = "apps:log-event";
 const AUTO_UPDATE_EVENT_CHANNEL = "update:state";
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15000;
 const QUICK_LAUNCHER_SIZE_COMPACT = "compact";
@@ -92,6 +93,7 @@ let isClosePromptVisible = false;
 const appWindows = new Map();
 const runtimeWindowStateByWebContentsId = new Map();
 const terminalSubscriptions = new Map();
+const appLogSubscriptions = new Map();
 const autoUpdateSubscribers = new Set();
 let appIcon = null;
 let autoUpdateInitialized = false;
@@ -1194,6 +1196,39 @@ function removeAllTerminalSubscriptionsForWebContents(webContentsId) {
     });
 }
 
+function makeAppLogSubscriptionKey(webContentsId, appId) {
+  return `${webContentsId}:${appId}`;
+}
+
+function removeAppLogSubscription(webContentsId, appId) {
+  const key = makeAppLogSubscriptionKey(webContentsId, appId);
+  const unsubscribe = appLogSubscriptions.get(key);
+  if (!unsubscribe) {
+    return;
+  }
+  appLogSubscriptions.delete(key);
+  try {
+    unsubscribe();
+  } catch {
+    // Ignore cleanup errors.
+  }
+}
+
+function removeAllAppLogSubscriptionsForWebContents(webContentsId) {
+  const prefix = `${webContentsId}:`;
+  Array.from(appLogSubscriptions.keys())
+    .filter((key) => key.startsWith(prefix))
+    .forEach((key) => {
+      const unsubscribe = appLogSubscriptions.get(key);
+      appLogSubscriptions.delete(key);
+      try {
+        unsubscribe?.();
+      } catch {
+        // Ignore cleanup errors.
+      }
+    });
+}
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -1815,8 +1850,23 @@ ipcMain.handle("apps:stop", async (_event, appId) => {
   return getAppsManager().stopApp(appId);
 });
 
+ipcMain.handle("apps:batch-stop", async (_event, appIds) => {
+  if (Array.isArray(appIds)) {
+    appIds.forEach((appId) => closeAppWindowById(appId));
+  }
+  return getAppsManager().stopApps(appIds);
+});
+
 ipcMain.handle("apps:get-logs", (_event, appId) => {
   return getAppsManager().getAppLogs(appId);
+});
+
+ipcMain.handle("apps:get-runs", (_event, appId, limit) => {
+  return getAppsManager().getAppRuns(appId, limit);
+});
+
+ipcMain.handle("apps:update-tab", async (_event, appId, tabId) => {
+  return getAppsManager().updateAppTab(appId, tabId);
 });
 
 ipcMain.handle("apps:remove", async (_event, appId) => {
@@ -1824,8 +1874,39 @@ ipcMain.handle("apps:remove", async (_event, appId) => {
   return getAppsManager().removeApp(appId);
 });
 
+ipcMain.handle("apps:batch-remove", async (_event, appIds) => {
+  if (Array.isArray(appIds)) {
+    appIds.forEach((appId) => closeAppWindowById(appId));
+  }
+  return getAppsManager().removeApps(appIds);
+});
+
 ipcMain.handle("apps:open-window", async (_event, appId, launchPayload) => {
   return openAppWindowById(appId, launchPayload);
+});
+
+ipcMain.on("apps:logs-subscribe", (event, appId) => {
+  const webContents = event.sender;
+  const webContentsId = webContents.id;
+  const key = makeAppLogSubscriptionKey(webContentsId, appId);
+  removeAppLogSubscription(webContentsId, appId);
+
+  const unsubscribe = getAppsManager().subscribeAppLogs(appId, (payload) => {
+    if (webContents.isDestroyed()) {
+      removeAppLogSubscription(webContentsId, appId);
+      return;
+    }
+    webContents.send(APP_LOG_EVENT_CHANNEL, payload);
+  });
+  appLogSubscriptions.set(key, unsubscribe);
+
+  webContents.once("destroyed", () => {
+    removeAllAppLogSubscriptionsForWebContents(webContentsId);
+  });
+});
+
+ipcMain.on("apps:logs-unsubscribe", (event, appId) => {
+  removeAppLogSubscription(event.sender.id, appId);
 });
 
 ipcMain.handle("app-runtime:get-info", async (event) => {

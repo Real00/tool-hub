@@ -3,7 +3,7 @@ import type {
   ConfigRestoreResult,
   TabDefinition,
 } from "../types/settings";
-import type { AppsRootInfo, InstalledApp } from "../types/app";
+import type { AppLogEvent, AppRunRecord, AppsRootInfo, InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
 import type { UpdateState } from "../types/update";
 import type {
@@ -72,7 +72,12 @@ interface ToolHubApi {
   ) => Promise<InstalledApp[]>;
   startApp: (appId: string) => Promise<InstalledApp[]>;
   stopApp: (appId: string) => Promise<InstalledApp[]>;
+  batchStopApps: (appIds: string[]) => Promise<InstalledApp[]>;
   getAppLogs: (appId: string) => Promise<string[]>;
+  getAppRuns: (appId: string, limit?: number) => Promise<AppRunRecord[]>;
+  updateAppTab: (appId: string, tabId: string) => Promise<InstalledApp[]>;
+  batchRemoveApps: (appIds: string[]) => Promise<InstalledApp[]>;
+  subscribeAppLogs: (appId: string, callback: (event: AppLogEvent) => void) => () => void;
   removeApp: (appId: string) => Promise<InstalledApp[]>;
   openAppWindow: (appId: string, launchPayload?: string) => Promise<boolean>;
   pickInstallDirectory: () => Promise<string | null>;
@@ -227,8 +232,31 @@ export function stopApp(appId: string): Promise<InstalledApp[]> {
   return getApi().stopApp(appId);
 }
 
+export function batchStopApps(appIds: string[]): Promise<InstalledApp[]> {
+  return getApi().batchStopApps(appIds);
+}
+
 export function getAppLogs(appId: string): Promise<string[]> {
   return getApi().getAppLogs(appId);
+}
+
+export function getAppRuns(appId: string, limit = 30): Promise<AppRunRecord[]> {
+  return getApi().getAppRuns(appId, limit);
+}
+
+export function updateAppTab(appId: string, tabId: string): Promise<InstalledApp[]> {
+  return getApi().updateAppTab(appId, tabId);
+}
+
+export function batchRemoveApps(appIds: string[]): Promise<InstalledApp[]> {
+  return getApi().batchRemoveApps(appIds);
+}
+
+export function subscribeAppLogs(
+  appId: string,
+  callback: (event: AppLogEvent) => void,
+): () => void {
+  return getApi().subscribeAppLogs(appId, callback);
 }
 
 export function removeApp(appId: string): Promise<InstalledApp[]> {

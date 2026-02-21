@@ -14,3 +14,22 @@ export interface AppsRootInfo {
   appsRoot: string;
   dbPath: string;
 }
+
+export interface AppRunRecord {
+  runId: number;
+  appId: string;
+  pid: number | null;
+  status: string;
+  startedAt: number;
+  endedAt: number | null;
+  exitCode: number | null;
+  durationMs: number | null;
+}
+
+export interface AppLogEvent {
+  appId: string;
+  line: string;
+  time: number;
+  stream: string;
+  text: string;
+}

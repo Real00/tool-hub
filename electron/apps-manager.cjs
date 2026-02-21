@@ -16,11 +16,14 @@ const APP_KV_MAX_KEY_LENGTH = 256;
 const APP_FILE_READ_MAX_BYTES = 500000;
 const STOP_APP_WAIT_TIMEOUT_MS = 1200;
 const STOP_APP_FORCE_WAIT_TIMEOUT_MS = 800;
+const APP_RUN_HISTORY_DEFAULT_LIMIT = 30;
+const APP_RUN_HISTORY_MAX_LIMIT = 200;
 
 let dbPromise = null;
 
 const runningApps = new Map();
 const appLogs = new Map();
+const appLogSubscribers = new Map();
 const manifestCacheByFolder = new Map();
 let appsRowsCache = null;
 let scanInFlight = null;
@@ -226,6 +229,14 @@ function normalizeMaxReadBytes(maxBytesInput) {
     return APP_FILE_READ_MAX_BYTES;
   }
   return Math.max(1024, Math.min(5_000_000, Math.floor(numeric)));
+}
+
+function normalizeRunHistoryLimit(limitInput) {
+  const numeric = Number(limitInput);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return APP_RUN_HISTORY_DEFAULT_LIMIT;
+  }
+  return Math.max(1, Math.min(APP_RUN_HISTORY_MAX_LIMIT, Math.floor(numeric)));
 }
 
 async function readManifest(appDir) {
@@ -536,15 +547,75 @@ async function scanAndSyncApps(options = {}) {
 
 function appendLog(appId, stream, text) {
   const lines = appLogs.get(appId) ?? [];
-  lines.push({
+  const line = {
     time: Date.now(),
     stream,
     text: String(text),
-  });
+  };
+  lines.push(line);
   if (lines.length > MAX_LOG_LINES) {
     lines.splice(0, lines.length - MAX_LOG_LINES);
   }
   appLogs.set(appId, lines);
+  emitAppLogLine(appId, line);
+}
+
+function formatLogLine(line) {
+  return `[${new Date(line.time).toISOString()}] [${line.stream}] ${line.text}`;
+}
+
+function emitAppLogLine(appId, line) {
+  const listeners = appLogSubscribers.get(appId);
+  if (!listeners || listeners.size === 0) {
+    return;
+  }
+
+  const payload = {
+    appId,
+    line: formatLogLine(line),
+    time: Number(line.time ?? Date.now()),
+    stream: String(line.stream ?? "system"),
+    text: String(line.text ?? ""),
+  };
+  listeners.forEach((listener) => {
+    try {
+      listener(payload);
+    } catch {
+      // Ignore subscriber errors to keep stream alive.
+    }
+  });
+}
+
+function clearAppLogSubscribers(appId) {
+  appLogSubscribers.delete(appId);
+}
+
+function subscribeAppLogs(appIdInput, listener) {
+  const appId = normalizeAppId(appIdInput, "");
+  if (!appId) {
+    throw new Error("Invalid app id.");
+  }
+  if (typeof listener !== "function") {
+    throw new Error("Log subscriber must be a function.");
+  }
+
+  let listeners = appLogSubscribers.get(appId);
+  if (!listeners) {
+    listeners = new Set();
+    appLogSubscribers.set(appId, listeners);
+  }
+  listeners.add(listener);
+
+  return () => {
+    const current = appLogSubscribers.get(appId);
+    if (!current) {
+      return;
+    }
+    current.delete(listener);
+    if (current.size === 0) {
+      appLogSubscribers.delete(appId);
+    }
+  };
 }
 
 function toUiUrl(record) {
@@ -1059,15 +1130,111 @@ async function stopApp(appId) {
 
 function getAppLogs(appId) {
   const lines = appLogs.get(appId) ?? [];
-  return lines.map((line) => `[${new Date(line.time).toISOString()}] [${line.stream}] ${line.text}`);
+  return lines.map((line) => formatLogLine(line));
+}
+
+async function getAppRuns(appIdInput, limitInput = APP_RUN_HISTORY_DEFAULT_LIMIT) {
+  const appId = normalizeAppId(appIdInput, "");
+  if (!appId) {
+    throw new Error("Invalid app id.");
+  }
+
+  const limit = normalizeRunHistoryLimit(limitInput);
+  const db = await getDb();
+  const existing = await db.get("SELECT id FROM apps WHERE id = ?", appId);
+  if (!existing) {
+    throw new Error(`App not found: ${appId}`);
+  }
+
+  const rows = await db.all(
+    `SELECT run_id, pid, status, started_at, ended_at, exit_code
+     FROM app_runs
+     WHERE app_id = ?
+     ORDER BY run_id DESC
+     LIMIT ?`,
+    appId,
+    limit,
+  );
+
+  return rows.map((row) => {
+    const startedAt = Number(row.started_at ?? 0);
+    const endedAt = row.ended_at === null || typeof row.ended_at === "undefined"
+      ? null
+      : Number(row.ended_at);
+    return {
+      runId: Number(row.run_id ?? 0),
+      appId,
+      pid: Number.isInteger(row.pid) ? Number(row.pid) : null,
+      status: String(row.status ?? "stopped"),
+      startedAt,
+      endedAt,
+      exitCode: Number.isInteger(row.exit_code) ? Number(row.exit_code) : null,
+      durationMs:
+        Number.isFinite(startedAt) && Number.isFinite(endedAt)
+          ? Math.max(0, endedAt - startedAt)
+          : null,
+    };
+  });
 }
 
 async function setAppTab(appId, tabId) {
+  const normalizedAppId = normalizeAppId(appId, "");
+  if (!normalizedAppId) {
+    throw new Error("Invalid app id.");
+  }
+  const normalizedTabId = normalizeTabId(tabId, "workspace");
+
   await runSerializedWrite(async () => {
     const db = await getDb();
-    await db.run("UPDATE apps SET tab_id = ?, updated_at = ? WHERE id = ?", tabId, Date.now(), appId);
+    const result = await db.run(
+      "UPDATE apps SET tab_id = ?, updated_at = ? WHERE id = ?",
+      normalizedTabId,
+      Date.now(),
+      normalizedAppId,
+    );
+    if (Number(result?.changes ?? 0) === 0) {
+      throw new Error(`App not found: ${normalizedAppId}`);
+    }
     invalidateAppsRowsCache();
   });
+}
+
+async function updateAppTab(appIdInput, tabIdInput) {
+  await setAppTab(appIdInput, tabIdInput);
+  return listApps();
+}
+
+function normalizeAppIdList(appIdsInput) {
+  if (!Array.isArray(appIdsInput)) {
+    return [];
+  }
+  const seen = new Set();
+  const output = [];
+  for (let i = 0; i < appIdsInput.length; i += 1) {
+    const normalized = normalizeAppId(appIdsInput[i], "");
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    output.push(normalized);
+  }
+  return output;
+}
+
+async function stopApps(appIdsInput) {
+  const appIds = normalizeAppIdList(appIdsInput);
+  for (let i = 0; i < appIds.length; i += 1) {
+    await stopApp(appIds[i]);
+  }
+  return listApps();
+}
+
+async function removeApps(appIdsInput) {
+  const appIds = normalizeAppIdList(appIdsInput);
+  for (let i = 0; i < appIds.length; i += 1) {
+    await removeApp(appIds[i]);
+  }
+  return listApps();
 }
 
 async function initializeAppsDatabase() {
@@ -1094,6 +1261,7 @@ async function removeApp(appIdInput) {
     runningApps.delete(appId);
   }
   appLogs.delete(appId);
+  clearAppLogSubscribers(appId);
 
   const appsRoot = path.resolve(resolveAppsRoot());
   const targetDir = path.resolve(record.app_dir);
@@ -1162,6 +1330,7 @@ async function installAppFromDirectory(sourceDir, requestedTabId, overwriteExist
       runningApps.delete(appId);
     }
     appLogs.delete(appId);
+    clearAppLogSubscribers(appId);
     fs.rmSync(targetDir, { recursive: true, force: true });
   }
 
@@ -1193,6 +1362,7 @@ async function closeAppsManager() {
   }
   runningApps.clear();
   appLogs.clear();
+  appLogSubscribers.clear();
   manifestCacheByFolder.clear();
   scanInFlight = null;
   hasCompletedInitialScan = false;
@@ -1222,6 +1392,7 @@ module.exports = {
   deleteAppStorageKey,
   getAppById,
   getAppLogs,
+  getAppRuns,
   getAppStorageValue,
   initializeAppsDatabase,
   initializeAppsManager,
@@ -1231,11 +1402,15 @@ module.exports = {
   readAppFile,
   readSystemFile,
   removeApp,
+  removeApps,
   resolveAppsRoot,
   resolveAppsDbPath,
   setAppStorageValue,
+  stopApps,
   startApp,
   stopApp,
+  subscribeAppLogs,
+  updateAppTab,
   writeAppFile,
   writeSystemFile,
 };

@@ -7,6 +7,15 @@ import {
   searchSystemApps,
   startApp,
 } from "../platform/electron-bridge";
+import {
+  computeLauncherHistoryBoost,
+  getRecentLauncherHistory,
+  makeLauncherHistoryKey,
+  readLauncherHistoryMap,
+  recordLauncherLaunch,
+  subscribeLauncherHistoryUpdates,
+  toggleLauncherFavorite,
+} from "../composables/launcher-history";
 import type { InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
 import type { TabDefinition } from "../types/settings";
@@ -19,6 +28,8 @@ interface LauncherResultItem {
   targetId: string;
   score: number;
   acceptsLaunchPayload: boolean;
+  historyKey: string;
+  favorite: boolean;
   iconDataUrl?: string;
 }
 
@@ -27,12 +38,14 @@ const props = defineProps<{
   activeTab: string;
   isSettingsActive: boolean;
   isGeneratorActive: boolean;
+  isRuntimeActive: boolean;
   installedApps: InstalledApp[];
 }>();
 
 const emit = defineEmits<{
   select: [tabId: string];
   generator: [];
+  runtime: [];
   settings: [];
 }>();
 
@@ -49,10 +62,12 @@ const launcherMessage = ref("");
 const launcherPanelOpen = ref(false);
 const launcherActiveIndex = ref(-1);
 const launcherPayloadTarget = ref<LauncherResultItem | null>(null);
+const launcherHistoryByKey = ref(readLauncherHistoryMap());
 
 let launcherSearchTimer: ReturnType<typeof setTimeout> | null = null;
 let launcherSearchToken = 0;
 let launcherQueryBeforePayload = "";
+let unsubscribeLauncherHistory: (() => void) | null = null;
 
 const launcherPlaceholder = computed(() => {
   if (launcherPayloadTarget.value) {
@@ -71,7 +86,7 @@ const launcherEmptyText = computed(() => {
     return launcherMessage.value || "Search failed.";
   }
   if (!launcherQuery.value.trim()) {
-    return "Type app name to search.";
+    return "Type app name to search. Recent launches are shown here.";
   }
   return "No matching apps.";
 });
@@ -79,6 +94,60 @@ const launcherEmptyText = computed(() => {
 function resetLauncherResults() {
   launcherResults.value = [];
   launcherActiveIndex.value = -1;
+  launcherStatus.value = "idle";
+}
+
+function refreshLauncherHistory() {
+  launcherHistoryByKey.value = readLauncherHistoryMap();
+}
+
+function buildRecentLauncherResults(): LauncherResultItem[] {
+  const installedById = new Map(props.installedApps.map((app) => [app.id, app]));
+  const recent = getRecentLauncherHistory(SEARCH_LIMIT);
+  const output: LauncherResultItem[] = [];
+
+  for (let i = 0; i < recent.length; i += 1) {
+    const item = recent[i];
+    const historyKey = makeLauncherHistoryKey(item.kind, item.targetId);
+    if (item.kind === "installed") {
+      const installed = installedById.get(item.targetId);
+      if (!installed) {
+        continue;
+      }
+      output.push({
+        id: `installed:${installed.id}`,
+        kind: "installed",
+        targetId: installed.id,
+        name: installed.name,
+        source: installed.running ? "Recent / Installed / Running" : "Recent / Installed",
+        score: 500 + computeLauncherHistoryBoost(item),
+        acceptsLaunchPayload: true,
+        historyKey,
+        favorite: item.favorite,
+      });
+      continue;
+    }
+
+    output.push({
+      id: `system:${item.targetId}`,
+      kind: "system",
+      targetId: item.targetId,
+      name: item.name,
+      source: `Recent / ${item.source}`,
+      score: 500 + computeLauncherHistoryBoost(item),
+      acceptsLaunchPayload: item.acceptsLaunchPayload,
+      historyKey,
+      favorite: item.favorite,
+    });
+  }
+
+  return output.slice(0, SEARCH_LIMIT);
+}
+
+function showRecentLauncherResults() {
+  const recent = buildRecentLauncherResults();
+  launcherResults.value = recent;
+  launcherActiveIndex.value = recent.length > 0 ? 0 : -1;
   launcherStatus.value = "idle";
 }
 
@@ -146,12 +215,18 @@ function searchInstalledApps(query: string): LauncherResultItem[] {
     .slice(0, INSTALLED_SEARCH_LIMIT);
 
   return scored.map(({ app, score }) => ({
+    historyKey: makeLauncherHistoryKey("installed", app.id),
+    favorite: launcherHistoryByKey.value.get(makeLauncherHistoryKey("installed", app.id))?.favorite === true,
     id: `installed:${app.id}`,
     kind: "installed",
     targetId: app.id,
     name: app.name,
     source: app.running ? "Installed / Running" : "Installed",
-    score,
+    score:
+      score +
+      computeLauncherHistoryBoost(
+        launcherHistoryByKey.value.get(makeLauncherHistoryKey("installed", app.id)),
+      ),
     acceptsLaunchPayload: true,
   }));
 }
@@ -167,7 +242,7 @@ async function runLauncherSearch() {
   const query = launcherQuery.value.trim();
   const token = ++launcherSearchToken;
   if (!query) {
-    resetLauncherResults();
+    showRecentLauncherResults();
     return;
   }
 
@@ -184,16 +259,22 @@ async function runLauncherSearch() {
     }
 
     const mappedSystemResults: LauncherResultItem[] = systemResults.map(
-      (app: SystemAppEntry, index) => ({
-        id: `system:${app.id}`,
-        kind: "system",
-        targetId: app.id,
-        name: app.name,
-        source: app.source,
-        iconDataUrl: app.iconDataUrl,
-        score: 180 - index,
-        acceptsLaunchPayload: !!app.acceptsLaunchPayload,
-      }),
+      (app: SystemAppEntry, index) => {
+        const historyKey = makeLauncherHistoryKey("system", app.id);
+        const history = launcherHistoryByKey.value.get(historyKey);
+        return {
+          id: `system:${app.id}`,
+          kind: "system",
+          targetId: app.id,
+          name: app.name,
+          source: app.source,
+          iconDataUrl: app.iconDataUrl,
+          score: 180 - index + computeLauncherHistoryBoost(history),
+          acceptsLaunchPayload: !!app.acceptsLaunchPayload,
+          historyKey,
+          favorite: history?.favorite === true,
+        };
+      },
     );
 
     const mergedResults = [...installedResults, ...mappedSystemResults]
@@ -252,11 +333,14 @@ watch(launcherQuery, () => {
   if (launcherPayloadTarget.value) {
     return;
   }
+  if (!launcherPanelOpen.value && !launcherQuery.value.trim()) {
+    return;
+  }
 
   launcherPanelOpen.value = true;
   if (!launcherQuery.value.trim()) {
     launcherSearchToken += 1;
-    resetLauncherResults();
+    showRecentLauncherResults();
     return;
   }
 
@@ -272,7 +356,11 @@ watch(
     if (launcherPayloadTarget.value) {
       return;
     }
-    if (!launcherQuery.value.trim() || !launcherPanelOpen.value) {
+    if (!launcherPanelOpen.value) {
+      return;
+    }
+    if (!launcherQuery.value.trim()) {
+      showRecentLauncherResults();
       return;
     }
     scheduleLauncherSearch();
@@ -312,10 +400,35 @@ async function executeLauncherTarget(target: LauncherResultItem, launchPayload?:
       await startApp(target.targetId);
       await openAppWindow(target.targetId, launchPayload);
     }
+    recordLauncherLaunch({
+      kind: target.kind,
+      targetId: target.targetId,
+      name: target.name,
+      source: target.source,
+      acceptsLaunchPayload: target.acceptsLaunchPayload,
+    });
+    refreshLauncherHistory();
     clearLauncher();
   } catch (error) {
     launcherStatus.value = "error";
     launcherMessage.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function handleLauncherResultContextMenu(
+  result: LauncherResultItem,
+  event: MouseEvent,
+) {
+  event.preventDefault();
+  const nextFavorite = toggleLauncherFavorite(result.historyKey);
+  refreshLauncherHistory();
+  launcherMessage.value = nextFavorite
+    ? `Favorited: ${result.name}`
+    : `Unfavorited: ${result.name}`;
+  if (!launcherQuery.value.trim()) {
+    showRecentLauncherResults();
+  } else {
+    scheduleLauncherSearch();
   }
 }
 
@@ -412,9 +525,11 @@ function handleLauncherFocus() {
     return;
   }
   launcherPanelOpen.value = true;
-  if (launcherQuery.value.trim()) {
-    scheduleLauncherSearch();
+  if (!launcherQuery.value.trim()) {
+    showRecentLauncherResults();
+    return;
   }
+  scheduleLauncherSearch();
 }
 
 function handleGlobalPointerDown(event: PointerEvent) {
@@ -428,10 +543,23 @@ function handleGlobalPointerDown(event: PointerEvent) {
 }
 
 onMounted(() => {
+  refreshLauncherHistory();
+  unsubscribeLauncherHistory = subscribeLauncherHistoryUpdates(() => {
+    refreshLauncherHistory();
+    if (
+      launcherPanelOpen.value &&
+      !launcherPayloadTarget.value &&
+      !launcherQuery.value.trim()
+    ) {
+      showRecentLauncherResults();
+    }
+  });
   window.addEventListener("pointerdown", handleGlobalPointerDown);
 });
 
 onBeforeUnmount(() => {
+  unsubscribeLauncherHistory?.();
+  unsubscribeLauncherHistory = null;
   window.removeEventListener("pointerdown", handleGlobalPointerDown);
   if (launcherSearchTimer) {
     clearTimeout(launcherSearchTimer);
@@ -492,6 +620,7 @@ onBeforeUnmount(() => {
                 "
                 @mouseenter="launcherActiveIndex = index"
                 @click="openLauncherItem(index)"
+                @contextmenu="handleLauncherResultContextMenu(app, $event)"
               >
                 <span class="flex min-w-0 items-center gap-2">
                   <span
@@ -507,9 +636,17 @@ onBeforeUnmount(() => {
                   </span>
                   <span class="truncate">{{ app.name }}</span>
                 </span>
-                <span class="shrink-0 text-xs text-slate-400">{{ app.source }}</span>
+                <span class="shrink-0 text-xs text-slate-400">
+                  {{ app.favorite ? "★ " : "" }}{{ app.source }}
+                </span>
               </button>
             </div>
+            <p
+              v-if="launcherResults.length > 0"
+              class="border-t border-slate-800 px-3 py-2 text-xs text-slate-500"
+            >
+              Tip: right-click a result to toggle favorite.
+            </p>
             <p
               v-if="launcherResults.length === 0"
               class="px-3 py-2 text-xs text-slate-400"
@@ -538,6 +675,18 @@ onBeforeUnmount(() => {
             @click="emit('generator')"
           >
             Generator
+          </button>
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
+            :class="
+              props.isRuntimeActive
+                ? 'bg-cyan-500/15 text-cyan-100 ring-1 ring-cyan-500/40'
+                : 'text-slate-300 hover:bg-slate-800/80 hover:text-slate-100'
+            "
+            @click="emit('runtime')"
+          >
+            Runtime
           </button>
           <button
             type="button"

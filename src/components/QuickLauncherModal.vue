@@ -7,6 +7,15 @@ import {
   searchSystemApps,
   startApp,
 } from "../platform/electron-bridge";
+import {
+  computeLauncherHistoryBoost,
+  getRecentLauncherHistory,
+  makeLauncherHistoryKey,
+  readLauncherHistoryMap,
+  recordLauncherLaunch,
+  subscribeLauncherHistoryUpdates,
+  toggleLauncherFavorite,
+} from "../composables/launcher-history";
 import type { InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
 
@@ -18,6 +27,8 @@ interface LauncherResultItem {
   targetId: string;
   score: number;
   acceptsLaunchPayload: boolean;
+  historyKey: string;
+  favorite: boolean;
   iconDataUrl?: string;
 }
 
@@ -53,10 +64,12 @@ const status = ref<"idle" | "loading" | "error">("idle");
 const message = ref("");
 const activeIndex = ref(-1);
 const launchPayloadTarget = ref<LauncherResultItem | null>(null);
+const launcherHistoryByKey = ref(readLauncherHistoryMap());
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let searchToken = 0;
 let searchQueryBeforePayload = "";
+let unsubscribeLauncherHistory: (() => void) | null = null;
 
 const placeholder = computed(() => {
   if (launchPayloadTarget.value) {
@@ -110,7 +123,7 @@ const inputContainerClass = computed(() => {
   if (props.embedded) {
     return "px-0 py-0";
   }
-  return "border-b border-slate-800 px-4 py-3";
+  return "px-4 py-4";
 });
 
 const resultsPanelClass = computed(() => {
@@ -128,7 +141,7 @@ const emptyText = computed(() => {
     return message.value || "Search failed.";
   }
   if (!query.value.trim()) {
-    return "Type app name to search.";
+    return "Type app name to search. Recent launches are shown here.";
   }
   return "No matching apps.";
 });
@@ -136,6 +149,60 @@ const emptyText = computed(() => {
 function resetResults() {
   results.value = [];
   activeIndex.value = -1;
+  status.value = "idle";
+}
+
+function refreshLauncherHistory() {
+  launcherHistoryByKey.value = readLauncherHistoryMap();
+}
+
+function buildRecentResults(): LauncherResultItem[] {
+  const installedById = new Map(props.installedApps.map((app) => [app.id, app]));
+  const recent = getRecentLauncherHistory(SEARCH_LIMIT);
+  const output: LauncherResultItem[] = [];
+
+  for (let i = 0; i < recent.length; i += 1) {
+    const item = recent[i];
+    const historyKey = makeLauncherHistoryKey(item.kind, item.targetId);
+    if (item.kind === "installed") {
+      const installed = installedById.get(item.targetId);
+      if (!installed) {
+        continue;
+      }
+      output.push({
+        id: `installed:${installed.id}`,
+        kind: "installed",
+        targetId: installed.id,
+        name: installed.name,
+        source: installed.running ? "Recent / Installed / Running" : "Recent / Installed",
+        score: 500 + computeLauncherHistoryBoost(item),
+        acceptsLaunchPayload: true,
+        historyKey,
+        favorite: item.favorite,
+      });
+      continue;
+    }
+
+    output.push({
+      id: `system:${item.targetId}`,
+      kind: "system",
+      targetId: item.targetId,
+      name: item.name,
+      source: `Recent / ${item.source}`,
+      score: 500 + computeLauncherHistoryBoost(item),
+      acceptsLaunchPayload: item.acceptsLaunchPayload,
+      historyKey,
+      favorite: item.favorite,
+    });
+  }
+
+  return output.slice(0, SEARCH_LIMIT);
+}
+
+function showRecentResults() {
+  const recent = buildRecentResults();
+  results.value = recent;
+  activeIndex.value = recent.length > 0 ? 0 : -1;
   status.value = "idle";
 }
 
@@ -220,12 +287,18 @@ function searchInstalledApps(input: string): LauncherResultItem[] {
     .slice(0, INSTALLED_SEARCH_LIMIT);
 
   return scored.map(({ app, score }) => ({
+    historyKey: makeLauncherHistoryKey("installed", app.id),
+    favorite: launcherHistoryByKey.value.get(makeLauncherHistoryKey("installed", app.id))?.favorite === true,
     id: `installed:${app.id}`,
     kind: "installed",
     targetId: app.id,
     name: app.name,
     source: app.running ? "Installed / Running" : "Installed",
-    score,
+    score:
+      score +
+      computeLauncherHistoryBoost(
+        launcherHistoryByKey.value.get(makeLauncherHistoryKey("installed", app.id)),
+      ),
     acceptsLaunchPayload: true,
   }));
 }
@@ -241,7 +314,7 @@ async function runSearch() {
   const trimmedQuery = query.value.trim();
   const token = ++searchToken;
   if (!trimmedQuery) {
-    resetResults();
+    showRecentResults();
     return;
   }
 
@@ -257,16 +330,22 @@ async function runSearch() {
     }
 
     const mappedSystemResults: LauncherResultItem[] = systemResults.map(
-      (app: SystemAppEntry, index) => ({
-        id: `system:${app.id}`,
-        kind: "system",
-        targetId: app.id,
-        name: app.name,
-        source: app.source,
-        iconDataUrl: app.iconDataUrl,
-        score: 180 - index,
-        acceptsLaunchPayload: !!app.acceptsLaunchPayload,
-      }),
+      (app: SystemAppEntry, index) => {
+        const historyKey = makeLauncherHistoryKey("system", app.id);
+        const history = launcherHistoryByKey.value.get(historyKey);
+        return {
+          id: `system:${app.id}`,
+          kind: "system",
+          targetId: app.id,
+          name: app.name,
+          source: app.source,
+          iconDataUrl: app.iconDataUrl,
+          score: 180 - index + computeLauncherHistoryBoost(history),
+          acceptsLaunchPayload: !!app.acceptsLaunchPayload,
+          historyKey,
+          favorite: history?.favorite === true,
+        };
+      },
     );
 
     const mergedResults = [...installedResults, ...mappedSystemResults]
@@ -341,11 +420,33 @@ async function executeLaunchTarget(target: LauncherResultItem, launchPayload?: s
       await startApp(target.targetId);
       await openAppWindow(target.targetId, launchPayload);
     }
+    recordLauncherLaunch({
+      kind: target.kind,
+      targetId: target.targetId,
+      name: target.name,
+      source: target.source,
+      acceptsLaunchPayload: target.acceptsLaunchPayload,
+    });
+    refreshLauncherHistory();
     clearSearch();
     closeModal();
   } catch (error) {
     status.value = "error";
     message.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+function handleResultContextMenu(target: LauncherResultItem, event: MouseEvent) {
+  event.preventDefault();
+  const nextFavorite = toggleLauncherFavorite(target.historyKey);
+  refreshLauncherHistory();
+  message.value = nextFavorite
+    ? `Favorited: ${target.name}`
+    : `Unfavorited: ${target.name}`;
+  if (!query.value.trim()) {
+    showRecentResults();
+  } else {
+    scheduleSearch();
   }
 }
 
@@ -439,7 +540,7 @@ watch(query, () => {
 
   if (!query.value.trim()) {
     searchToken += 1;
-    resetResults();
+    showRecentResults();
     return;
   }
 
@@ -455,7 +556,11 @@ watch(
     if (launchPayloadTarget.value) {
       return;
     }
-    if (!props.open || !query.value.trim()) {
+    if (!props.open) {
+      return;
+    }
+    if (!query.value.trim()) {
+      showRecentResults();
       return;
     }
     scheduleSearch();
@@ -472,6 +577,9 @@ watch(
     await nextTick();
     inputRef.value?.focus();
     inputRef.value?.select();
+    if (!query.value.trim() && !launchPayloadTarget.value) {
+      showRecentResults();
+    }
   },
 );
 
@@ -487,6 +595,8 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  unsubscribeLauncherHistory?.();
+  unsubscribeLauncherHistory = null;
   if (searchTimer) {
     clearTimeout(searchTimer);
     searchTimer = null;
@@ -494,10 +604,18 @@ onBeforeUnmount(() => {
 });
 
 onMounted(async () => {
+  refreshLauncherHistory();
+  unsubscribeLauncherHistory = subscribeLauncherHistoryUpdates(() => {
+    refreshLauncherHistory();
+    if (props.open && !launchPayloadTarget.value && !query.value.trim()) {
+      showRecentResults();
+    }
+  });
   if (props.open) {
     await nextTick();
     inputRef.value?.focus();
     inputRef.value?.select();
+    showRecentResults();
   }
 });
 </script>
@@ -517,7 +635,7 @@ onMounted(async () => {
           ref="inputRef"
           v-model="query"
           type="text"
-          class="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2.5 text-sm text-slate-100 outline-none ring-cyan-500/40 transition focus:border-slate-600 focus:ring disabled:cursor-not-allowed disabled:opacity-70"
+          class="w-full rounded-lg bg-slate-900/50 px-3 py-2.5 text-sm text-slate-100 outline-none ring-2 ring-transparent transition focus:bg-slate-900/70 focus:ring-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-70"
           :placeholder="placeholder"
           :disabled="!canSearchApps"
           @keydown="handleInputKeydown"
@@ -553,6 +671,7 @@ onMounted(async () => {
           "
           @mouseenter="activeIndex = index"
           @click="openResult(index)"
+          @contextmenu="handleResultContextMenu(app, $event)"
         >
           <span class="flex min-w-0 items-center gap-2">
             <span
@@ -568,8 +687,13 @@ onMounted(async () => {
             </span>
             <span class="truncate">{{ app.name }}</span>
           </span>
-          <span class="shrink-0 text-xs text-slate-400">{{ app.source }}</span>
+          <span class="shrink-0 text-xs text-slate-400">
+            {{ app.favorite ? "★ " : "" }}{{ app.source }}
+          </span>
         </button>
+        <p class="sticky bottom-0 border-t border-slate-800 bg-slate-950/95 px-4 py-2 text-xs text-slate-500">
+          Tip: right-click a result to toggle favorite.
+        </p>
       </div>
 
       <p
