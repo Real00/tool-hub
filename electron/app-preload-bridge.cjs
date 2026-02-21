@@ -4,17 +4,20 @@ contextBridge.exposeInMainWorld("toolHubAppApi", {
   getRuntimeInfo() {
     return ipcRenderer.invoke("app-runtime:get-info");
   },
-  subscribeLaunchPayload(callback) {
+  subscribeLaunchContext(callback) {
     if (typeof callback !== "function") {
       return () => {};
     }
     const listener = (_event, payload) => {
       callback(payload);
     };
-    ipcRenderer.on("app-runtime:launch-payload", listener);
+    ipcRenderer.on("app-runtime:launch-context", listener);
     return () => {
-      ipcRenderer.removeListener("app-runtime:launch-payload", listener);
+      ipcRenderer.removeListener("app-runtime:launch-context", listener);
     };
+  },
+  notify(title, body, options) {
+    return ipcRenderer.invoke("app-runtime:notify", title, body, options);
   },
   files: {
     read(filePath, options) {

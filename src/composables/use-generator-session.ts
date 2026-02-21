@@ -25,6 +25,7 @@ import {
   subscribeGeneratorProjectTerminal,
   startGeneratorProjectTerminal,
   stopGeneratorProjectTerminal,
+  updateGeneratorProjectAgents,
   validateGeneratorProject,
 } from "../platform/electron-bridge";
 
@@ -751,6 +752,41 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     }
   }
 
+  async function updateGeneratorProjectAgentsRules() {
+    if (!isElectronRuntime()) {
+      generatorStatus.value = "error";
+      generatorMessage.value = "Update AGENTS.md is only available in Electron runtime.";
+      return;
+    }
+    if (!generatorProjectId.value) {
+      generatorStatus.value = "error";
+      generatorMessage.value = "Please select a project first.";
+      return;
+    }
+
+    generatorStatus.value = "loading";
+    generatorMessage.value = "Updating AGENTS.md from template...";
+    try {
+      const result = await updateGeneratorProjectAgents(generatorProjectId.value);
+      generatorProject.value = result.project;
+      generatorProjectId.value = result.project.projectId;
+      upsertProjectSummary(toSummary(result.project));
+
+      const updatedFilePath = String(result.filePath ?? "AGENTS.md")
+        .trim()
+        .replace(/\\/g, "/");
+      if (updatedFilePath) {
+        await openGeneratorProjectFile(updatedFilePath);
+      }
+
+      generatorStatus.value = "success";
+      generatorMessage.value = `Updated ${updatedFilePath || "AGENTS.md"} in selected project.`;
+    } catch (error) {
+      generatorStatus.value = "error";
+      generatorMessage.value = `Update AGENTS.md failed: ${formatError(error)}`;
+    }
+  }
+
   async function executeInstall(overwriteExisting: boolean) {
     return installGeneratorProjectApp(
       generatorProjectId.value,
@@ -875,6 +911,7 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     openGeneratorProjectFile,
     runGeneratorProjectValidation,
     runGeneratorProjectVerifyCheck,
+    updateGeneratorProjectAgentsRules,
     saveClaudePathConfig,
     selectGeneratorProject,
     startEmbeddedTerminal,

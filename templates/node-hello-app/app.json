@@ -4,6 +4,20 @@
   "version": "0.1.0",
   "entry": "src/index.js",
   "uiPath": "ui/index.html",
+  "capabilities": [
+    {
+      "id": "handle-files",
+      "name": "Read File Content",
+      "description": "Read selected file content and show a preview in UI.",
+      "targets": ["file"]
+    },
+    {
+      "id": "handle-any-target",
+      "name": "Handle Files/Folders",
+      "description": "Demo capability for mixed file and folder selection.",
+      "targets": ["any"]
+    }
+  ],
   "env": {
     "APP_GREETING": "Hello from user app",
     "TICK_INTERVAL_MS": "3000"

@@ -3,11 +3,21 @@ import type {
   ConfigRestoreResult,
   TabDefinition,
 } from "../types/settings";
-import type { AppLogEvent, AppRunRecord, AppsRootInfo, InstalledApp } from "../types/app";
+import type {
+  AppCapabilityDispatchPayload,
+  AppCapabilityDispatchResult,
+  AppLaunchContextInput,
+  AppLogEvent,
+  AppRunRecord,
+  AppsRootInfo,
+  ContextDispatchRequest,
+  InstalledApp,
+} from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
 import type { UpdateState } from "../types/update";
 import type {
   ClaudeCliDetectionResult,
+  GeneratorProjectAgentsUpdateResult,
   GeneratorInstallResult,
   GeneratorProjectDetail,
   GeneratorProjectFileContent,
@@ -42,6 +52,7 @@ interface ToolHubApi {
     projectId: string,
     filePath: string,
   ) => Promise<GeneratorProjectFileContent>;
+  updateGeneratorProjectAgents: (projectId: string) => Promise<GeneratorProjectAgentsUpdateResult>;
   installGeneratorProjectApp: (
     projectId: string,
     tabId: string,
@@ -90,7 +101,10 @@ interface ToolHubApi {
   batchRemoveApps: (appIds: string[]) => Promise<InstalledApp[]>;
   subscribeAppLogs: (appId: string, callback: (event: AppLogEvent) => void) => () => void;
   removeApp: (appId: string) => Promise<InstalledApp[]>;
-  openAppWindow: (appId: string, launchPayload?: string) => Promise<boolean>;
+  openAppWindow: (appId: string, launchContext?: AppLaunchContextInput) => Promise<boolean>;
+  dispatchAppCapability: (
+    payload: AppCapabilityDispatchPayload,
+  ) => Promise<AppCapabilityDispatchResult>;
   pickInstallDirectory: () => Promise<string | null>;
   refreshSystemAppsIndex: () => Promise<number>;
   searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
@@ -103,6 +117,9 @@ interface ToolHubApi {
   installUpdateAndRestart: () => Promise<boolean>;
   subscribeUpdateEvents: (callback: (state: UpdateState) => void) => () => void;
   subscribeQuickLauncherRequest: (callback: () => void) => () => void;
+  subscribeContextDispatchRequest: (
+    callback: (payload: ContextDispatchRequest) => void,
+  ) => () => void;
 }
 
 function getApi(): ToolHubApi {
@@ -170,6 +187,12 @@ export function readGeneratorProjectFile(
   filePath: string,
 ): Promise<GeneratorProjectFileContent> {
   return getApi().readGeneratorProjectFile(projectId, filePath);
+}
+
+export function updateGeneratorProjectAgents(
+  projectId: string,
+): Promise<GeneratorProjectAgentsUpdateResult> {
+  return getApi().updateGeneratorProjectAgents(projectId);
 }
 
 export function installGeneratorProjectApp(
@@ -294,8 +317,17 @@ export function removeApp(appId: string): Promise<InstalledApp[]> {
   return getApi().removeApp(appId);
 }
 
-export function openAppWindow(appId: string, launchPayload?: string): Promise<boolean> {
-  return getApi().openAppWindow(appId, launchPayload);
+export function openAppWindow(
+  appId: string,
+  launchContext?: AppLaunchContextInput,
+): Promise<boolean> {
+  return getApi().openAppWindow(appId, launchContext);
+}
+
+export function dispatchAppCapability(
+  payload: AppCapabilityDispatchPayload,
+): Promise<AppCapabilityDispatchResult> {
+  return getApi().dispatchAppCapability(payload);
 }
 
 export function pickInstallDirectory(): Promise<string | null> {
@@ -346,4 +378,10 @@ export function subscribeUpdateEvents(callback: (state: UpdateState) => void): (
 
 export function subscribeQuickLauncherRequest(callback: () => void): () => void {
   return getApi().subscribeQuickLauncherRequest(callback);
+}
+
+export function subscribeContextDispatchRequest(
+  callback: (payload: ContextDispatchRequest) => void,
+): () => void {
+  return getApi().subscribeContextDispatchRequest(callback);
 }

@@ -1,8 +1,18 @@
 /// <reference types="vite/client" />
 
-import type { AppLogEvent, AppRunRecord, AppsRootInfo, InstalledApp } from "./types/app";
+import type {
+  AppCapabilityDispatchPayload,
+  AppCapabilityDispatchResult,
+  AppLaunchContextInput,
+  AppLogEvent,
+  AppRunRecord,
+  AppsRootInfo,
+  ContextDispatchRequest,
+  InstalledApp,
+} from "./types/app";
 import type {
   ClaudeCliDetectionResult,
+  GeneratorProjectAgentsUpdateResult,
   GeneratorInstallResult,
   GeneratorProjectDetail,
   GeneratorProjectFileContent,
@@ -38,6 +48,9 @@ declare global {
       projectId: string,
       filePath: string,
     ) => Promise<GeneratorProjectFileContent>;
+    updateGeneratorProjectAgents: (
+      projectId: string,
+    ) => Promise<GeneratorProjectAgentsUpdateResult>;
     installGeneratorProjectApp: (
       projectId: string,
       tabId: string,
@@ -89,7 +102,10 @@ declare global {
       callback: (event: AppLogEvent) => void,
     ) => () => void;
     removeApp: (appId: string) => Promise<InstalledApp[]>;
-    openAppWindow: (appId: string, launchPayload?: string) => Promise<boolean>;
+    openAppWindow: (appId: string, launchContext?: AppLaunchContextInput) => Promise<boolean>;
+    dispatchAppCapability: (
+      payload: AppCapabilityDispatchPayload,
+    ) => Promise<AppCapabilityDispatchResult>;
     pickInstallDirectory: () => Promise<string | null>;
     refreshSystemAppsIndex: () => Promise<number>;
     searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
@@ -108,6 +124,9 @@ declare global {
     installUpdateAndRestart: () => Promise<boolean>;
     subscribeUpdateEvents: (callback: (state: UpdateState) => void) => () => void;
     subscribeQuickLauncherRequest: (callback: () => void) => () => void;
+    subscribeContextDispatchRequest: (
+      callback: (payload: ContextDispatchRequest) => void,
+    ) => () => void;
   }
 
   interface Window {

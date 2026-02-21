@@ -4,7 +4,7 @@
 
 ## Changelog
 
-- 本次发布变更见 `CHANGELOG.md`（当前版本：`0.1.3`）。
+- 本次发布变更见 `CHANGELOG.md`（当前版本：`0.2.0`）。
 
 ## Start
 
@@ -94,6 +94,7 @@ defaultTabs: [
 - Drop an app folder into the apps root, or use **Select Dir** + choose **Target Tab** + **Install App** in Settings.
 - Use **Init DB** in apps section to initialize/check apps DB and rescan app folders.
 - Use **Remove** to uninstall an app (deletes app folder + DB records).
+- Windows Explorer context menu can forward selected files/folders to Tool Hub for capability dispatch.
 - Each app runs in an isolated Node process with its own cwd/env.
 - Apps are grouped under top tabs by `apps.tab_id` in SQLite.
 - 应用 UI 在独立窗口中打开（不嵌入主页面）。
@@ -103,8 +104,9 @@ defaultTabs: [
 
 When an app UI window is opened by Tool Hub, the host injects `window.toolHubAppApi` in that window:
 
-- `getRuntimeInfo()` -> returns `{ appId, launchPayload, launchPayloadUpdatedAt }`
-- `subscribeLaunchPayload(callback)` -> receive payload updates while window is open
+- `getRuntimeInfo()` -> returns `{ appId, launchContext, launchContextUpdatedAt }`
+- `subscribeLaunchContext(callback)` -> receive structured context dispatch updates
+- `notify(title, body, options?)` -> send host system notification
 - `storage.get(key)`
 - `storage.set(key, value)`
 - `storage.delete(key)`
@@ -135,6 +137,10 @@ All storage entries are persisted in host SQLite and scoped by app id.
   "version": "0.1.0",
   "entry": "src/index.js",
   "uiPath": "ui/index.html",
+  "capabilities": [
+    { "id": "handle-files", "name": "Handle Files", "targets": ["file"] },
+    { "id": "handle-any-target", "name": "Handle Files/Folders", "targets": ["any"] }
+  ],
   "env": {
     "PORT": "4310"
   }
@@ -145,6 +151,7 @@ All storage entries are persisted in host SQLite and scoped by app id.
 - `entry`: JavaScript entry relative to app folder (runs with `--run-as-node`)
 - `uiPath` (optional): local UI file opened in a new window (`file://...`)
 - `uiUrl` (optional): URL opened in a new window (`http://...`)
+- `capabilities` (optional): capability definitions for file/folder context dispatch (`targets`: `file|folder|any`)
 
 ### Quick start from template (PowerShell)
 
@@ -185,6 +192,7 @@ src/
   - generator: `getGeneratorSettings` `saveGeneratorSettings` `detectClaudeCli` `createGeneratorProject` `getGeneratorProject` `listGeneratorProjects` `readGeneratorProjectFile`
   - generator terminal: `getGeneratorProjectTerminal` `startGeneratorProjectTerminal` `sendGeneratorProjectTerminalInput` `stopGeneratorProjectTerminal` `resizeGeneratorProjectTerminal` `subscribeGeneratorProjectTerminal`
   - apps: `getAppsRoot` `listApps` `initializeAppsDatabase` `installAppFromDirectory` `startApp` `stopApp` `getAppLogs` `removeApp` `openAppWindow` `pickInstallDirectory`
+  - apps dispatch: `dispatchAppCapability` `subscribeContextDispatchRequest`
   - system apps: `refreshSystemAppsIndex` `searchSystemApps` `openSystemApp`
   - updates: `getUpdateState` `checkForUpdates` `downloadUpdate` `installUpdateAndRestart` `subscribeUpdateEvents`
   - quick launcher: `closeQuickLauncherWindow` `setQuickLauncherWindowSize` `subscribeQuickLauncherRequest`
@@ -193,11 +201,12 @@ src/
   - settings: `settings:get-tabs` `settings:save-tabs` `settings:initialize-db` `settings:backup-config` `settings:restore-config`
   - generator: `generator:get-settings` `generator:save-settings` `generator:detect-claude-cli` `generator:create-project` `generator:get-project` `generator:list-projects` `generator:read-project-file` `generator:install-project`
   - generator terminal: `generator:get-terminal` `generator:start-terminal` `generator:terminal-input` `generator:stop-terminal` `generator:resize-terminal` `generator:terminal-subscribe` `generator:terminal-unsubscribe` `generator:terminal-output`
-  - apps: `apps:get-root` `apps:list` `apps:initialize-db` `apps:install-from-directory` `apps:start` `apps:stop` `apps:get-logs` `apps:remove` `apps:open-window` `apps:pick-install-directory`
-  - app runtime: `app-runtime:get-info` `app-runtime:launch-payload` `app-runtime:kv-get` `app-runtime:kv-set` `app-runtime:kv-delete` `app-runtime:kv-list` `app-runtime:kv-clear` `app-runtime:file-read` `app-runtime:file-write` `app-runtime:system-file-read` `app-runtime:system-file-write`
+  - apps: `apps:get-root` `apps:list` `apps:initialize-db` `apps:install-from-directory` `apps:start` `apps:stop` `apps:get-logs` `apps:remove` `apps:open-window` `apps:dispatch-capability` `apps:pick-install-directory`
+  - app runtime: `app-runtime:get-info` `app-runtime:launch-context` `app-runtime:notify` `app-runtime:kv-get` `app-runtime:kv-set` `app-runtime:kv-delete` `app-runtime:kv-list` `app-runtime:kv-clear` `app-runtime:file-read` `app-runtime:file-write` `app-runtime:system-file-read` `app-runtime:system-file-write`
   - system apps: `system-apps:refresh` `system-apps:search` `system-apps:open`
   - updates: `update:get-state` `update:check` `update:download` `update:install` `update:subscribe` `update:unsubscribe` `update:state`
   - quick launcher: `quick-launcher:open` `quick-launcher:close` `quick-launcher:set-size`
+  - context dispatch: `context-dispatch:request` `context-dispatch:consume-pending`
 
 ## License
 

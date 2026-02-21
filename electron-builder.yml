@@ -18,6 +18,10 @@ extraResources:
     to: assets
     filter:
       - "**/*"
+  - from: templates/node-hello-app
+    to: templates/node-hello-app
+    filter:
+      - "AGENTS.md"
 win:
   icon: electron/assets/app-icon.ico
   target:

@@ -44,6 +44,13 @@ export interface GeneratorProjectFileContent {
   truncated: boolean;
 }
 
+export interface GeneratorProjectAgentsUpdateResult {
+  projectId: string;
+  filePath: string;
+  updatedAt: number;
+  project: GeneratorProjectDetail;
+}
+
 export interface GeneratorValidationIssue {
   code: string;
   level: "error" | "warning";

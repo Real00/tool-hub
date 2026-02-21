@@ -161,14 +161,30 @@
               <button id="toast-btn">Show Message</button>
               <button id="time-btn">Current Time</button>
               <button id="pulse-btn">Pulse Card</button>
+              <button id="notify-btn">Host Notify</button>
             </div>
           </div>
 
           <div class="panel">
             <p><strong>Launch Payload</strong></p>
             <p class="subtle">Use search, press Space to select app, then type payload and press Enter.</p>
+            <p class="subtle">Payload text is available via <code>launchContext.payload</code>.</p>
             <p class="mono" id="launch-payload-value">(none)</p>
             <p class="subtle mono" id="launch-payload-meta">updated: -</p>
+            <p class="subtle mono" id="launch-context-value">context: (none)</p>
+          </div>
+
+          <div class="panel" style="grid-column: 1 / -1">
+            <p><strong>Capability Demo: Read File Content</strong></p>
+            <p class="subtle">
+              Trigger this app from Explorer context menu with a capability that supports file targets
+              (for example <code>handle-files</code>).
+              The sample reads file content via <code>systemFiles.read</code> and shows previews below.
+            </p>
+            <div class="row">
+              <button id="context-read-files-btn">Run On Current launchContext</button>
+            </div>
+            <textarea id="capability-output" class="mono" readonly>Waiting for capability dispatch...</textarea>
           </div>
 
           <div class="panel">
@@ -247,6 +263,8 @@
       const kvOutput = document.getElementById("kv-output");
       const launchPayloadValue = document.getElementById("launch-payload-value");
       const launchPayloadMeta = document.getElementById("launch-payload-meta");
+      const launchContextValue = document.getElementById("launch-context-value");
+      const capabilityOutput = document.getElementById("capability-output");
       const kvKeyInput = document.getElementById("kv-key");
       const kvValueInput = document.getElementById("kv-value");
       const fileOutput = document.getElementById("file-output");
@@ -254,7 +272,9 @@
       const anyPathContent = document.getElementById("any-path-content");
       const anyPathOutput = document.getElementById("any-path-output");
       let hostAppApi = null;
-      let unsubscribeLaunchPayload = null;
+      let unsubscribeLaunchContext = null;
+      let currentLaunchContext = null;
+      let currentLaunchContextUpdatedAt = null;
       try {
         hostAppApi = window.toolHubAppApi ?? null;
       } catch (error) {
@@ -276,14 +296,129 @@
         }, 1600);
       }
 
-      function renderLaunchPayload(payload, updatedAt) {
-        const normalizedPayload = typeof payload === "string" ? payload : "";
+      function isExplorerContext(context) {
+        return (
+          String(context?.source ?? "").trim().toLowerCase() === "explorer-context-menu"
+        );
+      }
+
+      function getLaunchSource(context) {
+        const source = String(context?.source ?? "").trim().toLowerCase();
+        return source || "unknown";
+      }
+
+      function renderLaunchPayload(context = null, updatedAt = null) {
+        const normalizedPayload =
+          typeof context?.payload === "string" ? String(context.payload) : "";
+        const source = getLaunchSource(context);
         launchPayloadValue.textContent = normalizedPayload || "(none)";
         if (updatedAt) {
-          launchPayloadMeta.textContent = `updated: ${new Date(updatedAt).toLocaleString()}`;
+          launchPayloadMeta.textContent = `updated: ${new Date(updatedAt).toLocaleString()} · source=${source}`;
           return;
         }
-        launchPayloadMeta.textContent = "updated: -";
+        launchPayloadMeta.textContent = `updated: - · source=${source}`;
+      }
+
+      function renderLaunchContext(context) {
+        if (!launchContextValue) {
+          return;
+        }
+        if (!context || typeof context !== "object") {
+          launchContextValue.textContent = "context: (none)";
+          return;
+        }
+        try {
+          const text = JSON.stringify(context, null, 2);
+          launchContextValue.textContent =
+            text.length > 180 ? `context: ${text.slice(0, 180)}...` : `context: ${text}`;
+        } catch {
+          launchContextValue.textContent = "context: [invalid]";
+        }
+      }
+
+      function setCapabilityOutput(text) {
+        if (!capabilityOutput) {
+          return;
+        }
+        capabilityOutput.value = String(text ?? "");
+      }
+
+      function getLaunchCapabilityId(context) {
+        return String(context?.capability?.id ?? "").trim().toLowerCase();
+      }
+
+      function supportsFileReadCapability(context) {
+        const capabilityId = getLaunchCapabilityId(context);
+        return isExplorerContext(context) && capabilityId === "handle-files";
+      }
+
+      async function runReadFileCapability(context, triggerSource = "manual") {
+        if (!context || typeof context !== "object") {
+          setCapabilityOutput("No launchContext available.");
+          return;
+        }
+        const capabilityId = getLaunchCapabilityId(context);
+        if (!supportsFileReadCapability(context)) {
+          setCapabilityOutput(
+            `Current capability "${capabilityId || "(none)"}" is not "handle-files".`,
+          );
+          return;
+        }
+        if (!hostAppApi?.systemFiles) {
+          setCapabilityOutput("systemFiles API unavailable in current runtime.");
+          showToast("systemFiles API unavailable.");
+          return;
+        }
+
+        const rawTargets = Array.isArray(context.targets) ? context.targets : [];
+        const fileTargets = rawTargets.filter(
+          (item) =>
+            item &&
+            item.kind === "file" &&
+            typeof item.path === "string" &&
+            item.path.trim(),
+        );
+        if (fileTargets.length === 0) {
+          setCapabilityOutput("No file targets found in launchContext.");
+          return;
+        }
+
+        const maxTargets = 5;
+        const selectedTargets = fileTargets.slice(0, maxTargets);
+        const result = {
+          capabilityId,
+          requestedAt: context.requestedAt || null,
+          requestId: context.requestId || null,
+          totalFileTargets: fileTargets.length,
+          processedCount: selectedTargets.length,
+          truncatedTargetCount: Math.max(0, fileTargets.length - selectedTargets.length),
+          items: [],
+        };
+
+        for (let i = 0; i < selectedTargets.length; i += 1) {
+          const target = selectedTargets[i];
+          try {
+            const data = await hostAppApi.systemFiles.read(target.path, { maxBytes: 20000 });
+            result.items.push({
+              path: data.path || target.path,
+              size: Number(data.size ?? 0),
+              truncated: data.truncated === true,
+              preview: String(data.content ?? "").slice(0, 400),
+            });
+          } catch (error) {
+            result.items.push({
+              path: target.path,
+              error: String(error?.message || error),
+            });
+          }
+        }
+
+        setCapabilityOutput(JSON.stringify(result, null, 2));
+        if (triggerSource === "auto") {
+          showToast(`Capability handled: read ${selectedTargets.length} file(s).`);
+        } else {
+          showToast("Read-file-content capability executed.");
+        }
       }
 
       document.getElementById("counter-add").addEventListener("click", () => {
@@ -326,6 +461,36 @@
         );
       });
 
+      document.getElementById("notify-btn").addEventListener("click", async () => {
+        if (!hostAppApi?.notify) {
+          showToast("Host notify API is unavailable.");
+          return;
+        }
+        try {
+          await hostAppApi.notify("Hello App", `UI notify ${new Date().toLocaleTimeString()}`);
+          showToast("Host notify sent.");
+        } catch (error) {
+          showToast(`Host notify failed: ${error?.message || error}`);
+        }
+      });
+
+      document.getElementById("context-read-files-btn").addEventListener("click", () => {
+        void runReadFileCapability(currentLaunchContext, "manual");
+      });
+
+      function applyLaunchContextUpdate(context, updatedAt) {
+        currentLaunchContext = context && typeof context === "object" ? context : null;
+        currentLaunchContextUpdatedAt =
+          typeof updatedAt === "number" && Number.isFinite(updatedAt)
+            ? updatedAt
+            : null;
+        renderLaunchContext(currentLaunchContext);
+        renderLaunchPayload(currentLaunchContext, currentLaunchContextUpdatedAt);
+        if (supportsFileReadCapability(currentLaunchContext)) {
+          void runReadFileCapability(currentLaunchContext, "auto");
+        }
+      }
+
       async function runKvAction(action) {
         if (!hostAppApi?.storage) {
           kvRuntimeInfo.textContent = "runtime: toolHubAppApi is unavailable";
@@ -348,31 +513,31 @@
           .getRuntimeInfo()
           .then((info) => {
             kvRuntimeInfo.textContent = `runtime appId: ${info?.appId || "-"}`;
-            renderLaunchPayload(info?.launchPayload, info?.launchPayloadUpdatedAt);
+            applyLaunchContextUpdate(info?.launchContext, info?.launchContextUpdatedAt);
           })
           .catch(() => {
             kvRuntimeInfo.textContent = "runtime appId: unavailable";
-            renderLaunchPayload(null, null);
+            applyLaunchContextUpdate(null, null);
           });
       } else {
         kvRuntimeInfo.textContent = "runtime: toolHubAppApi is unavailable";
-        renderLaunchPayload(null, null);
+        applyLaunchContextUpdate(null, null);
       }
 
-      if (hostAppApi?.subscribeLaunchPayload) {
-        unsubscribeLaunchPayload = hostAppApi.subscribeLaunchPayload((payload) => {
-          renderLaunchPayload(payload?.launchPayload, payload?.launchPayloadUpdatedAt);
-          showToast("Launch payload updated.");
+      if (hostAppApi?.subscribeLaunchContext) {
+        unsubscribeLaunchContext = hostAppApi.subscribeLaunchContext((payload) => {
+          applyLaunchContextUpdate(payload?.launchContext, payload?.launchContextUpdatedAt);
+          showToast("Launch context updated.");
         });
       }
 
       window.addEventListener("beforeunload", () => {
         try {
-          unsubscribeLaunchPayload?.();
+          unsubscribeLaunchContext?.();
         } catch {
           // Ignore unsubscribe errors.
         }
-        unsubscribeLaunchPayload = null;
+        unsubscribeLaunchContext = null;
       });
 
       document.getElementById("kv-load-btn").addEventListener("click", () => {

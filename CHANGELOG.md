@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0] - 2026-02-21
+
+### Added
+- 新增 Windows 资源管理器右键分发能力：主进程聚合上下文目标、渲染端分发请求订阅与能力选择弹窗，支持按 `capabilities` 精准分发到应用。
+- 新增应用能力分发与结构化启动上下文协议：`apps:dispatch-capability`、`launchContext.capability`、`launchContext.targets`。
+- Generator 页面新增“更新 AGENTS.md”能力，可一键将最新模板规则同步到当前开发项目。
+- 模板 `node-hello-app` 新增 capability demo、`notify` 示例与更完整的 `launchContext` 使用示例。
+
+### Fixed
+- 修复打包版本执行“更新 AGENTS.md”时模板文件缺失问题：增加多路径回退读取与内置模板资源兜底。
+
+### Changed
+- 运行时启动协议统一为 `launchContext`，移除 `launchPayload` 及其订阅通道；`openAppWindow` 改为接收结构化 `launchContext`。
+- `ToolHubApi`、preload bridge、类型定义与模板文档同步升级到新协议。
+- 打包配置补充 `templates/node-hello-app/AGENTS.md` 到 `extraResources`，确保发布版可用。
+
 ## [0.1.3] - 2026-02-21
 
 ### Added

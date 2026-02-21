@@ -2,15 +2,23 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 import AppTopMenu from "../components/AppTopMenu.vue";
+import CapabilityDispatchModal from "../components/CapabilityDispatchModal.vue";
 import QuickLauncherModal from "../components/QuickLauncherModal.vue";
 import { useToolHubState } from "../composables/use-tool-hub-state";
-import { isElectronRuntime, subscribeQuickLauncherRequest } from "../platform/electron-bridge";
+import {
+    isElectronRuntime,
+    subscribeContextDispatchRequest,
+    subscribeQuickLauncherRequest,
+} from "../platform/electron-bridge";
+import type { ContextDispatchRequest } from "../types/app";
 
 const route = useRoute();
 const router = useRouter();
 const { activeTab, apps, dispose, enterSettingsMode, init, tabs } = useToolHubState();
 const quickLauncherOpen = ref(false);
+const contextDispatchRequest = ref<ContextDispatchRequest | null>(null);
 let unsubscribeQuickLauncherRequest: (() => void) | null = null;
+let unsubscribeContextDispatchRequest: (() => void) | null = null;
 
 const isSettingsRoute = computed(() => route.name === "settings");
 const isGeneratorRoute = computed(() => route.name === "generator");
@@ -63,8 +71,18 @@ function handleQuickLauncherClose() {
     quickLauncherOpen.value = false;
 }
 
+function handleContextDispatchClose() {
+    contextDispatchRequest.value = null;
+}
+
 onMounted(() => {
     init();
+    if (isElectronRuntime()) {
+        unsubscribeContextDispatchRequest = subscribeContextDispatchRequest((payload) => {
+            contextDispatchRequest.value = payload;
+            quickLauncherOpen.value = false;
+        });
+    }
     if (isElectronRuntime() && !isQuickLauncherRoute.value) {
         unsubscribeQuickLauncherRequest = subscribeQuickLauncherRequest(() => {
             quickLauncherOpen.value = true;
@@ -75,6 +93,8 @@ onMounted(() => {
 onUnmounted(() => {
     unsubscribeQuickLauncherRequest?.();
     unsubscribeQuickLauncherRequest = null;
+    unsubscribeContextDispatchRequest?.();
+    unsubscribeContextDispatchRequest = null;
     dispose();
 });
 </script>
@@ -111,6 +131,13 @@ onUnmounted(() => {
             :open="quickLauncherOpen"
             :installed-apps="apps"
             @close="handleQuickLauncherClose"
+        />
+
+        <CapabilityDispatchModal
+            :open="!!contextDispatchRequest"
+            :request="contextDispatchRequest"
+            :installed-apps="apps"
+            @close="handleContextDispatchClose"
         />
 
         <main class="relative mx-auto w-full px-4 pb-10 pt-7 md:px-6">

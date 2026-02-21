@@ -2,6 +2,7 @@ const {
   app,
   BrowserWindow,
   Menu,
+  Notification,
   Tray,
   dialog,
   globalShortcut,
@@ -19,6 +20,7 @@ let appsManagerModule = null;
 let settingsStoreModule = null;
 let appGeneratorModule = null;
 let systemAppsManagerModule = null;
+let windowsContextMenuModule = null;
 let autoUpdaterInstance = null;
 let autoUpdaterLoadAttempted = false;
 let isConfigRestoreInProgress = false;
@@ -65,18 +67,33 @@ function getSystemAppsManager() {
   return systemAppsManagerModule;
 }
 
-const devServerUrl = process.argv[2];
+function getWindowsContextMenu() {
+  if (!windowsContextMenuModule) {
+    windowsContextMenuModule = require("./windows-context-menu.cjs");
+  }
+  return windowsContextMenuModule;
+}
+
+const devServerUrl =
+  process.argv.find((value) => /^https?:\/\//i.test(String(value ?? ""))) || "";
 const isDev = Boolean(devServerUrl);
 const APP_NAME = "Tool Hub";
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const bootTraceEnabled = process.env.TOOL_HUB_BOOT_LOG === "1";
 const bootStartAt = Date.now();
-const APP_RUNTIME_LAUNCH_PAYLOAD_CHANNEL = "app-runtime:launch-payload";
+const APP_RUNTIME_LAUNCH_CONTEXT_CHANNEL = "app-runtime:launch-context";
 const APP_LOG_EVENT_CHANNEL = "apps:log-event";
 const AUTO_UPDATE_EVENT_CHANNEL = "update:state";
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15000;
 const QUICK_LAUNCHER_SIZE_COMPACT = "compact";
 const QUICK_LAUNCHER_SIZE_EXPANDED = "expanded";
+const CONTEXT_DISPATCH_REQUEST_CHANNEL = "context-dispatch:request";
+const CONTEXT_DISPATCH_SOURCE_EXPLORER = "explorer-context-menu";
+const CONTEXT_DISPATCH_AGGREGATE_WINDOW_MS = 650;
+const CONTEXT_DISPATCH_MAX_QUEUE = 32;
+const CONTEXT_DISPATCH_PENDING_TTL_MS = 5000;
+const NOTIFICATION_MAX_TEXT_LENGTH = 200;
+const CONTEXT_TARGET_KINDS = new Set(["file", "folder", "unknown"]);
 
 let mainWindow = null;
 let quickLauncherWindow = null;
@@ -95,11 +112,14 @@ const runtimeWindowStateByWebContentsId = new Map();
 const terminalSubscriptions = new Map();
 const appLogSubscriptions = new Map();
 const autoUpdateSubscribers = new Set();
+const pendingContextDispatchTargetsByKey = new Map();
+const pendingContextDispatchRequests = [];
 let appIcon = null;
 let autoUpdateInitialized = false;
 let autoUpdateStartupTimer = null;
 let autoUpdateCheckInFlight = false;
 let autoUpdateDownloadInFlight = false;
+let pendingContextDispatchTimer = null;
 
 const ASSETS_DIR_CANDIDATES = [
   path.join(process.resourcesPath, "assets"),
@@ -558,6 +578,7 @@ function showMainWindow() {
   }
   mainWindow.show();
   mainWindow.focus();
+  flushPendingContextDispatchRequestsToRenderer();
 }
 
 function hideMainWindow() {
@@ -694,6 +715,7 @@ function createMainWindow() {
   });
   win.webContents.on("did-finish-load", () => {
     bootTrace("main window did-finish-load");
+    flushPendingContextDispatchRequestsToRenderer();
   });
   win.on("close", (event) => {
     if (isQuitting) {
@@ -996,6 +1018,208 @@ function normalizeLaunchPayload(input) {
   };
 }
 
+function normalizeLaunchContextSource(input, fallback = "manual") {
+  const normalized = String(input ?? "")
+    .trim()
+    .toLowerCase();
+  if (
+    normalized === CONTEXT_DISPATCH_SOURCE_EXPLORER ||
+    normalized === "quick-launcher" ||
+    normalized === "manual"
+  ) {
+    return normalized;
+  }
+  const normalizedFallback = String(fallback ?? "manual")
+    .trim()
+    .toLowerCase();
+  if (
+    normalizedFallback === CONTEXT_DISPATCH_SOURCE_EXPLORER ||
+    normalizedFallback === "quick-launcher" ||
+    normalizedFallback === "manual"
+  ) {
+    return normalizedFallback;
+  }
+  return "manual";
+}
+
+function normalizeLaunchContextTargetKind(input) {
+  const normalized = String(input ?? "")
+    .trim()
+    .toLowerCase();
+  if (!CONTEXT_TARGET_KINDS.has(normalized)) {
+    return "unknown";
+  }
+  return normalized;
+}
+
+function normalizeLaunchContextTargets(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set();
+  const targets = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const item = input[i];
+    const sourcePath =
+      typeof item === "string"
+        ? item
+        : item && typeof item === "object"
+          ? item.path
+          : "";
+    const text = String(sourcePath ?? "").trim();
+    if (!text || text.includes("\0")) {
+      continue;
+    }
+    const absolutePath = path.resolve(text);
+    const uniqueKey =
+      process.platform === "win32" ? absolutePath.toLowerCase() : absolutePath;
+    if (seen.has(uniqueKey)) {
+      continue;
+    }
+    seen.add(uniqueKey);
+    targets.push({
+      path: absolutePath,
+      kind: normalizeLaunchContextTargetKind(item?.kind),
+    });
+  }
+  return targets;
+}
+
+function normalizeLaunchContextCapabilityTargets(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set();
+  const targets = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const normalized = String(input[i] ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      (normalized === "file" ||
+        normalized === "folder" ||
+        normalized === "any") &&
+      !seen.has(normalized)
+    ) {
+      seen.add(normalized);
+      targets.push(normalized);
+    }
+  }
+  return targets;
+}
+
+function normalizeLaunchContext(input) {
+  if (input === undefined) {
+    return { provided: false, value: null };
+  }
+  if (input === null) {
+    return { provided: true, value: null };
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { provided: true, value: null };
+  }
+
+  const source = normalizeLaunchContextSource(input.source, "manual");
+  const requestedAtRaw = Number(input.requestedAt);
+  const requestedAt = Number.isFinite(requestedAtRaw) && requestedAtRaw > 0
+    ? Math.floor(requestedAtRaw)
+    : Date.now();
+  const requestId =
+    String(input.requestId ?? "").trim() ||
+    createContextDispatchRequestId("launch");
+  const payload = normalizeLaunchPayload(input.payload);
+
+  const capabilityInput =
+    input.capability && typeof input.capability === "object"
+      ? input.capability
+      : null;
+  const capabilityId = normalizeCapabilityId(capabilityInput?.id);
+  const capabilityName = String(capabilityInput?.name ?? "").trim();
+  const capabilityTargets = normalizeLaunchContextCapabilityTargets(
+    capabilityInput?.targets,
+  );
+  const targets = normalizeLaunchContextTargets(input.targets);
+  const value = {
+    source,
+    requestId,
+    requestedAt,
+  };
+  if (payload.value) {
+    value.payload = payload.value;
+  }
+  if (capabilityId) {
+    value.capability = {
+      id: capabilityId,
+      name: capabilityName || capabilityId,
+      targets: capabilityTargets,
+    };
+  }
+  if (targets.length > 0) {
+    value.targets = targets;
+  }
+
+  return {
+    provided: true,
+    value,
+  };
+}
+
+function cloneLaunchContext(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+
+  const source = normalizeLaunchContextSource(input.source, "manual");
+  const requestId =
+    String(input.requestId ?? "").trim() ||
+    createContextDispatchRequestId("launch");
+  const requestedAtRaw = Number(input.requestedAt);
+  const requestedAt = Number.isFinite(requestedAtRaw) && requestedAtRaw > 0
+    ? Math.floor(requestedAtRaw)
+    : Date.now();
+  const payload = normalizeLaunchPayload(input.payload);
+  const output = {
+    source,
+    requestId,
+    requestedAt,
+  };
+  if (payload.value) {
+    output.payload = payload.value;
+  }
+
+  const capabilityInput =
+    input.capability && typeof input.capability === "object"
+      ? input.capability
+      : null;
+  const capabilityId = normalizeCapabilityId(capabilityInput?.id);
+  if (capabilityId) {
+    output.capability = {
+      id: capabilityId,
+      name: String(capabilityInput?.name ?? "").trim() || capabilityId,
+      targets: normalizeLaunchContextCapabilityTargets(capabilityInput?.targets),
+    };
+  }
+
+  const targets = normalizeLaunchContextTargets(input.targets);
+  if (targets.length > 0) {
+    output.targets = targets;
+  }
+
+  return output;
+}
+
+function normalizeOpenAppWindowInput(input) {
+  if (
+    input &&
+    typeof input === "object" &&
+    !Array.isArray(input) &&
+    Object.prototype.hasOwnProperty.call(input, "launchContext")
+  ) {
+    return input.launchContext;
+  }
+  return input;
+}
+
 function getRuntimeStateByWebContents(webContents) {
   if (!webContents || webContents.isDestroyed()) {
     return null;
@@ -1003,48 +1227,51 @@ function getRuntimeStateByWebContents(webContents) {
   return runtimeWindowStateByWebContentsId.get(webContents.id) ?? null;
 }
 
-function setRuntimeWindowLaunchPayload(
-  win,
-  appId,
-  launchPayloadInput,
-  emitUpdate = false,
-) {
+function emitRuntimeLaunchContextUpdate(webContents, state) {
+  if (!webContents || webContents.isDestroyed()) {
+    return;
+  }
+  webContents.send(APP_RUNTIME_LAUNCH_CONTEXT_CHANNEL, {
+    launchContext: cloneLaunchContext(state.launchContext),
+    launchContextUpdatedAt: state.launchContextUpdatedAt,
+  });
+}
+
+function setRuntimeWindowLaunchState(win, appId, openInput, emitUpdate = false) {
   if (!win || win.isDestroyed()) {
     return;
   }
 
+  const launchContextInput = normalizeOpenAppWindowInput(openInput);
   const webContents = win.webContents;
   const webContentsId = webContents.id;
   const previous = runtimeWindowStateByWebContentsId.get(webContentsId) ?? null;
-  const normalized = normalizeLaunchPayload(launchPayloadInput);
+  const normalizedContext = normalizeLaunchContext(launchContextInput);
   const next = previous
     ? { ...previous }
     : {
         appId,
-        launchPayload: null,
-        launchPayloadUpdatedAt: Date.now(),
+        launchContext: null,
+        launchContextUpdatedAt: Date.now(),
       };
 
   next.appId = appId;
-  if (normalized.provided || !previous) {
-    next.launchPayload = normalized.value;
-    next.launchPayloadUpdatedAt = Date.now();
+  if (normalizedContext.provided || !previous) {
+    next.launchContext = cloneLaunchContext(normalizedContext.value);
+    next.launchContextUpdatedAt = Date.now();
   }
 
   runtimeWindowStateByWebContentsId.set(webContentsId, next);
 
-  if (emitUpdate && normalized.provided && !webContents.isDestroyed()) {
-    webContents.send(APP_RUNTIME_LAUNCH_PAYLOAD_CHANNEL, {
-      launchPayload: next.launchPayload,
-      launchPayloadUpdatedAt: next.launchPayloadUpdatedAt,
-    });
+  if (emitUpdate && normalizedContext.provided) {
+    emitRuntimeLaunchContextUpdate(webContents, next);
   }
 }
 
-async function openAppWindowById(appId, launchPayloadInput) {
+async function openAppWindowById(appId, openInput) {
   const existing = appWindows.get(appId);
   if (existing && !existing.isDestroyed()) {
-    setRuntimeWindowLaunchPayload(existing, appId, launchPayloadInput, true);
+    setRuntimeWindowLaunchState(existing, appId, openInput, true);
     if (existing.isMinimized()) {
       existing.restore();
     }
@@ -1077,7 +1304,7 @@ async function openAppWindowById(appId, launchPayloadInput) {
   });
 
   appWindows.set(appId, win);
-  setRuntimeWindowLaunchPayload(win, appId, launchPayloadInput, false);
+  setRuntimeWindowLaunchState(win, appId, openInput, false);
   stripWindowMenu(win);
   attachWindowKeyboardShortcuts(win);
   const webContentsId = win.webContents.id;
@@ -1161,6 +1388,448 @@ function requireRuntimeAppId(event) {
     throw new Error("Unauthorized app runtime request.");
   }
   return appId;
+}
+
+function trimNotificationText(input, fallback = "", allowEmpty = false) {
+  const text = String(input ?? "").trim();
+  if (!text) {
+    const fallbackText = String(fallback ?? "").trim();
+    if (!fallbackText && allowEmpty) {
+      return "";
+    }
+    return fallbackText || APP_NAME;
+  }
+  if (text.length <= NOTIFICATION_MAX_TEXT_LENGTH) {
+    return text;
+  }
+  return `${text.slice(0, NOTIFICATION_MAX_TEXT_LENGTH - 1)}…`;
+}
+
+function showSystemNotification(titleInput, bodyInput, options = {}) {
+  try {
+    if (typeof Notification !== "function") {
+      return false;
+    }
+    if (typeof Notification.isSupported === "function" && !Notification.isSupported()) {
+      return false;
+    }
+    const title = trimNotificationText(titleInput, APP_NAME);
+    const body = trimNotificationText(bodyInput, "", true);
+    const notification = new Notification({
+      title,
+      body,
+      silent: options.silent === true,
+      icon: getAppIcon() || undefined,
+    });
+    notification.show();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCapabilityId(input) {
+  return String(input ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeCapabilityTargets(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set();
+  const targets = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const normalized = String(input[i] ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      (normalized === "file" ||
+        normalized === "folder" ||
+        normalized === "any") &&
+      !seen.has(normalized)
+    ) {
+      seen.add(normalized);
+      targets.push(normalized);
+    }
+  }
+  return targets;
+}
+
+function normalizeDispatchSource(input) {
+  const source = String(input ?? "").trim();
+  return source || CONTEXT_DISPATCH_SOURCE_EXPLORER;
+}
+
+function normalizeDispatchTargetPath(input) {
+  let text = String(input ?? "").trim();
+  for (let i = 0; i < 3; i += 1) {
+    if (text.length < 2) {
+      break;
+    }
+    const first = text[0];
+    const last = text[text.length - 1];
+    if (
+      (first === "\"" && last === "\"") ||
+      (first === "'" && last === "'")
+    ) {
+      text = text.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  if (!text) {
+    return "";
+  }
+  if (text.includes("\0")) {
+    return "";
+  }
+  if (text.startsWith("-")) {
+    return "";
+  }
+  if (!path.isAbsolute(text)) {
+    return "";
+  }
+  return path.resolve(text);
+}
+
+async function detectDispatchTargetKind(absolutePath) {
+  try {
+    const stat = await fs.promises.stat(absolutePath);
+    if (stat.isFile()) {
+      return "file";
+    }
+    if (stat.isDirectory()) {
+      return "folder";
+    }
+  } catch {
+    // Ignore stat errors and fallback to unknown.
+  }
+  return "unknown";
+}
+
+async function normalizeDispatchTargets(input) {
+  if (!Array.isArray(input)) {
+    throw new Error("Dispatch targets are required.");
+  }
+  const seen = new Set();
+  const targets = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const item = input[i];
+    const sourcePath =
+      typeof item === "string"
+        ? item
+        : item && typeof item === "object"
+          ? item.path
+          : "";
+    const absolutePath = normalizeDispatchTargetPath(sourcePath);
+    if (!absolutePath) {
+      continue;
+    }
+    const key = process.platform === "win32" ? absolutePath.toLowerCase() : absolutePath;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const detectedKind = await detectDispatchTargetKind(absolutePath);
+    const fallbackKind =
+      item && typeof item === "object"
+        ? normalizeLaunchContextTargetKind(item.kind)
+        : "unknown";
+    const kind = detectedKind !== "unknown" ? detectedKind : fallbackKind;
+    targets.push({
+      path: absolutePath,
+      kind: normalizeLaunchContextTargetKind(kind),
+    });
+  }
+  if (targets.length === 0) {
+    throw new Error("No valid dispatch targets were provided.");
+  }
+  return targets;
+}
+
+function createContextDispatchRequestId(prefix = "ctx") {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getAppCapabilityById(appInfo, capabilityIdInput) {
+  const capabilityId = normalizeCapabilityId(capabilityIdInput);
+  if (!capabilityId) {
+    return null;
+  }
+  const capabilities = Array.isArray(appInfo?.capabilities)
+    ? appInfo.capabilities
+    : [];
+  for (let i = 0; i < capabilities.length; i += 1) {
+    const item = capabilities[i];
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    if (normalizeCapabilityId(item.id) !== capabilityId) {
+      continue;
+    }
+    const targets = normalizeCapabilityTargets(item.targets);
+    if (targets.length === 0) {
+      continue;
+    }
+    return {
+      id: capabilityId,
+      name: String(item.name ?? capabilityId).trim() || capabilityId,
+      description: String(item.description ?? "").trim() || null,
+      targets,
+    };
+  }
+  return null;
+}
+
+function capabilitySupportsTargets(capability, targets) {
+  if (!capability || !Array.isArray(capability.targets)) {
+    return false;
+  }
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return false;
+  }
+  if (capability.targets.includes("any")) {
+    return true;
+  }
+  return targets.every((item) => item.kind === "file" || item.kind === "folder")
+    && targets.every((item) => capability.targets.includes(item.kind));
+}
+
+async function dispatchAppCapabilitySelection(input) {
+  const payload = input && typeof input === "object" ? input : {};
+  const appId = normalizeCapabilityId(payload.appId);
+  const capabilityId = normalizeCapabilityId(payload.capabilityId);
+  if (!appId) {
+    throw new Error("Invalid app id.");
+  }
+  if (!capabilityId) {
+    throw new Error("Invalid capability id.");
+  }
+
+  const appInfo = await getAppsManager().getAppById(appId);
+  if (!appInfo) {
+    throw new Error(`App not found: ${appId}`);
+  }
+  const capability = getAppCapabilityById(appInfo, capabilityId);
+  if (!capability) {
+    throw new Error(`Capability not found: ${capabilityId}`);
+  }
+
+  const targets = await normalizeDispatchTargets(payload.targets);
+  if (!capabilitySupportsTargets(capability, targets)) {
+    throw new Error("Capability targets do not match selected file/folder targets.");
+  }
+
+  const requestedAtRaw = Number(payload.requestedAt);
+  const requestedAt = Number.isFinite(requestedAtRaw) && requestedAtRaw > 0
+    ? Math.floor(requestedAtRaw)
+    : Date.now();
+  const requestId =
+    String(payload.requestId ?? "").trim() ||
+    createContextDispatchRequestId("dispatch");
+  const source = normalizeDispatchSource(payload.source);
+  const launchContext = {
+    source,
+    requestId,
+    requestedAt,
+    capability: {
+      id: capability.id,
+      name: capability.name,
+      targets: [...capability.targets],
+    },
+    targets: targets.map((item) => ({
+      path: item.path,
+      kind: item.kind,
+    })),
+  };
+
+  await getAppsManager().startApp(appId);
+  await openAppWindowById(appId, launchContext);
+
+  const targetCount = targets.length;
+  const targetLabel = targetCount === 1 ? "target" : "targets";
+  showSystemNotification(
+    APP_NAME,
+    `Dispatched ${appInfo.name} / ${capability.name} (${targetCount} ${targetLabel}).`,
+  );
+
+  return {
+    ok: true,
+    appId,
+    capabilityId: capability.id,
+    requestId,
+    targetCount,
+  };
+}
+
+function canSendContextDispatchRequests() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
+  const webContents = mainWindow.webContents;
+  if (!webContents || webContents.isDestroyed()) {
+    return false;
+  }
+  return !webContents.isLoadingMainFrame();
+}
+
+function toContextDispatchEventPayload(entry) {
+  return {
+    requestId: String(entry?.requestId ?? ""),
+    requestedAt: Number(entry?.requestedAt ?? Date.now()),
+    source: String(entry?.source ?? CONTEXT_DISPATCH_SOURCE_EXPLORER),
+    targets: Array.isArray(entry?.targets)
+      ? entry.targets.map((target) => ({
+          path: String(target?.path ?? ""),
+          kind: normalizeLaunchContextTargetKind(target?.kind),
+        }))
+      : [],
+  };
+}
+
+function pruneContextDispatchQueue(now = Date.now()) {
+  for (let i = pendingContextDispatchRequests.length - 1; i >= 0; i -= 1) {
+    const entry = pendingContextDispatchRequests[i];
+    const sentAt = Number(entry?.__sentAt ?? 0);
+    if (!sentAt) {
+      continue;
+    }
+    if (now - sentAt > CONTEXT_DISPATCH_PENDING_TTL_MS) {
+      pendingContextDispatchRequests.splice(i, 1);
+    }
+  }
+}
+
+function flushPendingContextDispatchRequestsToRenderer() {
+  pruneContextDispatchQueue();
+  if (!canSendContextDispatchRequests()) {
+    return;
+  }
+  const webContents = mainWindow.webContents;
+  const sentAt = Date.now();
+  for (let i = 0; i < pendingContextDispatchRequests.length; i += 1) {
+    const entry = pendingContextDispatchRequests[i];
+    if (!entry) {
+      continue;
+    }
+    webContents.send(
+      CONTEXT_DISPATCH_REQUEST_CHANNEL,
+      toContextDispatchEventPayload(entry),
+    );
+    if (!entry.__sentAt) {
+      entry.__sentAt = sentAt;
+    }
+  }
+}
+
+function enqueueContextDispatchRequest(payload) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  pendingContextDispatchRequests.push({
+    ...toContextDispatchEventPayload(payload),
+    __sentAt: null,
+  });
+  pruneContextDispatchQueue();
+  if (pendingContextDispatchRequests.length > CONTEXT_DISPATCH_MAX_QUEUE) {
+    pendingContextDispatchRequests.splice(
+      0,
+      pendingContextDispatchRequests.length - CONTEXT_DISPATCH_MAX_QUEUE,
+    );
+  }
+  flushPendingContextDispatchRequestsToRenderer();
+}
+
+function queueContextDispatchTargets(pathsInput) {
+  if (!Array.isArray(pathsInput)) {
+    return;
+  }
+  for (let i = 0; i < pathsInput.length; i += 1) {
+    const absolutePath = normalizeDispatchTargetPath(pathsInput[i]);
+    if (!absolutePath) {
+      continue;
+    }
+    const key = process.platform === "win32" ? absolutePath.toLowerCase() : absolutePath;
+    pendingContextDispatchTargetsByKey.set(key, absolutePath);
+  }
+  if (pendingContextDispatchTargetsByKey.size === 0) {
+    return;
+  }
+  if (pendingContextDispatchTimer) {
+    clearTimeout(pendingContextDispatchTimer);
+  }
+  pendingContextDispatchTimer = setTimeout(() => {
+    pendingContextDispatchTimer = null;
+    void flushPendingContextDispatchTargets();
+  }, CONTEXT_DISPATCH_AGGREGATE_WINDOW_MS);
+}
+
+async function flushPendingContextDispatchTargets() {
+  const rawTargets = Array.from(pendingContextDispatchTargetsByKey.values());
+  pendingContextDispatchTargetsByKey.clear();
+  if (rawTargets.length === 0) {
+    return;
+  }
+
+  let targets = [];
+  try {
+    targets = await normalizeDispatchTargets(rawTargets);
+  } catch (error) {
+    console.warn(
+      "Failed to normalize context dispatch targets:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return;
+  }
+  if (targets.length === 0) {
+    return;
+  }
+
+  enqueueContextDispatchRequest({
+    requestId: createContextDispatchRequestId("ctxmenu"),
+    requestedAt: Date.now(),
+    source: CONTEXT_DISPATCH_SOURCE_EXPLORER,
+    targets,
+  });
+}
+
+function collectContextDispatchTargetsFromArgv(argv) {
+  try {
+    return getWindowsContextMenu().collectContextTargetsFromArgv(argv);
+  } catch (error) {
+    console.warn(
+      "Failed to parse context dispatch argv:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return [];
+  }
+}
+
+function queueContextDispatchTargetsFromArgv(argv) {
+  const targets = collectContextDispatchTargetsFromArgv(argv);
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return 0;
+  }
+  queueContextDispatchTargets(targets);
+  return targets.length;
+}
+
+function ensureWindowsContextMenuRegistered() {
+  if (process.platform !== "win32" || isDev) {
+    return;
+  }
+  try {
+    getWindowsContextMenu().registerWindowsContextMenu();
+  } catch (error) {
+    console.warn(
+      "Windows context menu registration skipped:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
 
 function makeTerminalSubscriptionKey(webContentsId, projectId) {
@@ -1689,6 +2358,15 @@ async function restoreConfigurationFromArchive() {
   }
 }
 
+ipcMain.handle("context-dispatch:consume-pending", async () => {
+  pruneContextDispatchQueue();
+  const snapshot = pendingContextDispatchRequests.map((item) =>
+    toContextDispatchEventPayload(item),
+  );
+  pendingContextDispatchRequests.length = 0;
+  return snapshot;
+});
+
 ipcMain.handle("tool-hub:ping", (_event, name) => {
   const dbPath = getSettingsStore().resolveDatabasePath();
   return `Electron backend is online: ${name} (sqlite: ${dbPath})`;
@@ -1744,6 +2422,10 @@ ipcMain.handle(
     return getAppGenerator().readProjectFile(projectId, filePath);
   },
 );
+
+ipcMain.handle("generator:update-project-agents", async (_event, projectId) => {
+  return getAppGenerator().updateProjectAgentsRules(projectId);
+});
 
 ipcMain.handle(
   "generator:install-project",
@@ -1895,8 +2577,18 @@ ipcMain.handle("apps:batch-remove", async (_event, appIds) => {
   return getAppsManager().removeApps(appIds);
 });
 
-ipcMain.handle("apps:open-window", async (_event, appId, launchPayload) => {
-  return openAppWindowById(appId, launchPayload);
+ipcMain.handle("apps:open-window", async (_event, appId, launchContext) => {
+  return openAppWindowById(appId, launchContext);
+});
+
+ipcMain.handle("apps:dispatch-capability", async (_event, payload) => {
+  try {
+    return await dispatchAppCapabilitySelection(payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    showSystemNotification(APP_NAME, `Capability dispatch failed: ${message}`);
+    throw error;
+  }
 });
 
 ipcMain.on("apps:logs-subscribe", (event, appId) => {
@@ -1928,9 +2620,23 @@ ipcMain.handle("app-runtime:get-info", async (event) => {
   const runtimeState = getRuntimeStateByWebContents(event.sender);
   return {
     appId,
-    launchPayload: runtimeState?.launchPayload ?? null,
-    launchPayloadUpdatedAt: runtimeState?.launchPayloadUpdatedAt ?? null,
+    launchContext: cloneLaunchContext(runtimeState?.launchContext ?? null),
+    launchContextUpdatedAt: runtimeState?.launchContextUpdatedAt ?? null,
   };
+});
+
+ipcMain.handle("app-runtime:notify", async (event, titleInput, bodyInput, options) => {
+  const appId = requireRuntimeAppId(event);
+  const appInfo = await getAppsManager().getAppById(appId);
+  const title = trimNotificationText(titleInput, appInfo?.name || APP_NAME);
+  const body = trimNotificationText(bodyInput, "", true);
+  if (!body) {
+    throw new Error("Notification body is required.");
+  }
+  showSystemNotification(title, body, {
+    silent: options?.silent === true,
+  });
+  return true;
 });
 
 ipcMain.handle("app-runtime:kv-get", async (event, key) => {
@@ -2053,7 +2759,8 @@ ipcMain.on("update:unsubscribe", (event) => {
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_event, argv) => {
+    const queuedCount = queueContextDispatchTargetsFromArgv(argv);
     if (!app.isReady()) {
       app.once("ready", () => {
         showMainWindow();
@@ -2062,16 +2769,26 @@ if (!hasSingleInstanceLock) {
       return;
     }
     showMainWindow();
+    if (queuedCount > 0) {
+      flushPendingContextDispatchRequestsToRenderer();
+    }
     updateTrayMenu();
   });
 
   app.whenReady().then(() => {
     bootTrace("app.whenReady");
     Menu.setApplicationMenu(null);
+    ensureWindowsContextMenuRegistered();
     createMainWindow();
     createTray();
     registerQuickLauncherHotkey();
     initializeAutoUpdater();
+    const startupContextTargetCount = queueContextDispatchTargetsFromArgv(
+      process.argv,
+    );
+    if (startupContextTargetCount > 0) {
+      showMainWindow();
+    }
 
     const bootAppsManager = () => {
       void getAppsManager()
@@ -2133,6 +2850,12 @@ if (!hasSingleInstanceLock) {
       clearTimeout(autoUpdateStartupTimer);
       autoUpdateStartupTimer = null;
     }
+    if (pendingContextDispatchTimer) {
+      clearTimeout(pendingContextDispatchTimer);
+      pendingContextDispatchTimer = null;
+    }
+    pendingContextDispatchTargetsByKey.clear();
+    pendingContextDispatchRequests.length = 0;
   });
 
   app.on("will-quit", () => {

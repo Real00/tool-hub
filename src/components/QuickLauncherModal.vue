@@ -418,7 +418,10 @@ async function executeLaunchTarget(target: LauncherResultItem, launchPayload?: s
       await openSystemApp(target.targetId, launchPayload);
     } else {
       await startApp(target.targetId);
-      await openAppWindow(target.targetId, launchPayload);
+      await openAppWindow(target.targetId, {
+        source: "quick-launcher",
+        payload: launchPayload,
+      });
     }
     recordLauncherLaunch({
       kind: target.kind,

@@ -14,6 +14,8 @@ const TOOL_HUB_ROOT_DIR = ".tool-hub";
 const GENERATOR_DIR_NAME = "generator";
 const METADATA_FILE_NAME = ".toolhub-generator.json";
 const TEMPLATE_DIR_REL = "../templates/node-hello-app";
+const TEMPLATE_AGENTS_FILE_NAME = "AGENTS.md";
+const TEMPLATE_AGENTS_ASSET_FILE_NAME = "node-hello-app-agents-template.txt";
 
 const CHAT_TIMEOUT_MS = 240000;
 const MAX_OUTPUT_CHARS = 2_000_000;
@@ -598,6 +600,57 @@ function readProjectFile(projectIdInput, filePathInput) {
   };
 }
 
+function resolveTemplateAgentsSourcePath() {
+  const candidates = [
+    path.join(resolveTemplateDir(), TEMPLATE_AGENTS_FILE_NAME),
+    path.join(
+      process.resourcesPath,
+      "templates",
+      "node-hello-app",
+      TEMPLATE_AGENTS_FILE_NAME,
+    ),
+    path.join(__dirname, "assets", TEMPLATE_AGENTS_ASSET_FILE_NAME),
+    path.join(process.resourcesPath, "assets", TEMPLATE_AGENTS_ASSET_FILE_NAME),
+  ];
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const item = candidates[i];
+    if (fs.existsSync(item) && fs.statSync(item).isFile()) {
+      return item;
+    }
+  }
+
+  throw new Error(
+    `Template AGENTS.md not found. Checked: ${candidates.join(" | ")}`,
+  );
+}
+
+function updateProjectAgentsRules(projectIdInput) {
+  const { projectId, projectDir } = resolveProjectDir(projectIdInput);
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+
+  const templateAgentsPath = resolveTemplateAgentsSourcePath();
+
+  const targetPath = path.join(projectDir, TEMPLATE_AGENTS_FILE_NAME);
+  fs.copyFileSync(templateAgentsPath, targetPath);
+
+  const metadata = readProjectMetadata(projectDir);
+  metadata.updatedAt = now();
+  writeProjectMetadata(projectDir, metadata);
+
+  const terminal = ensureTerminalState(projectId);
+  terminal.updatedAt = metadata.updatedAt;
+
+  return {
+    projectId,
+    filePath: TEMPLATE_AGENTS_FILE_NAME,
+    updatedAt: metadata.updatedAt,
+    project: buildProjectDetail(projectId),
+  };
+}
+
 function createValidationIssue(level, code, message, filePath = undefined) {
   const issue = {
     code: String(code),
@@ -623,6 +676,26 @@ function createValidationCheck(code, status, message, filePath = undefined) {
     check.path = String(filePath);
   }
   return check;
+}
+
+function normalizeCapabilityId(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeCapabilityTarget(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (
+    normalized === "file" ||
+    normalized === "folder" ||
+    normalized === "any"
+  ) {
+    return normalized;
+  }
+  return "";
 }
 
 function validateProject(projectIdInput, requestedTabId) {
@@ -825,6 +898,99 @@ function validateProject(projectIdInput, requestedTabId) {
     }
   } else {
     addPass("ENV_OPTIONAL", "`env` is optional.");
+  }
+
+  if (Object.prototype.hasOwnProperty.call(manifest, "capabilities")) {
+    if (!Array.isArray(manifest.capabilities)) {
+      addError(
+        "CAPABILITIES_NOT_ARRAY",
+        "`capabilities` must be an array when provided.",
+        manifestPath,
+      );
+    } else {
+      const seenCapabilityIds = new Set();
+      let hasCapabilityError = false;
+      for (let i = 0; i < manifest.capabilities.length; i += 1) {
+        const item = manifest.capabilities[i];
+        const itemPath = `${manifestPath}#capabilities[${i}]`;
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          hasCapabilityError = true;
+          addError(
+            "CAPABILITY_ITEM_INVALID",
+            "Each capability must be an object.",
+            itemPath,
+          );
+          continue;
+        }
+
+        const capabilityId = normalizeCapabilityId(item.id);
+        const capabilityName = String(item.name ?? "").trim();
+        if (!capabilityId) {
+          hasCapabilityError = true;
+          addError(
+            "CAPABILITY_ID_INVALID",
+            "Capability `id` is required and must be valid.",
+            itemPath,
+          );
+        } else if (seenCapabilityIds.has(capabilityId)) {
+          hasCapabilityError = true;
+          addError(
+            "CAPABILITY_ID_DUPLICATE",
+            `Duplicate capability id: ${capabilityId}`,
+            itemPath,
+          );
+        } else {
+          seenCapabilityIds.add(capabilityId);
+        }
+
+        if (!capabilityName) {
+          hasCapabilityError = true;
+          addError(
+            "CAPABILITY_NAME_REQUIRED",
+            "Capability `name` is required.",
+            itemPath,
+          );
+        }
+
+        if (!Array.isArray(item.targets)) {
+          hasCapabilityError = true;
+          addError(
+            "CAPABILITY_TARGETS_NOT_ARRAY",
+            "Capability `targets` must be an array.",
+            itemPath,
+          );
+          continue;
+        }
+        const parsedTargets = [];
+        const seenTargets = new Set();
+        for (let j = 0; j < item.targets.length; j += 1) {
+          const normalizedTarget = normalizeCapabilityTarget(item.targets[j]);
+          if (!normalizedTarget || seenTargets.has(normalizedTarget)) {
+            continue;
+          }
+          seenTargets.add(normalizedTarget);
+          parsedTargets.push(normalizedTarget);
+        }
+        if (parsedTargets.length === 0) {
+          hasCapabilityError = true;
+          addError(
+            "CAPABILITY_TARGETS_EMPTY",
+            "Capability `targets` must contain file/folder/any.",
+            itemPath,
+          );
+          continue;
+        }
+      }
+      if (!hasCapabilityError) {
+        addPass(
+          "CAPABILITIES_OK",
+          `Capabilities validated (${manifest.capabilities.length} item(s)).`,
+          manifestPath,
+        );
+      }
+    }
+  } else {
+    addPass("CAPABILITIES_OPTIONAL", "`capabilities` is optional.");
   }
 
   if (!requestedTabText) {
@@ -1414,6 +1580,7 @@ module.exports = {
   installProjectApp,
   listProjects,
   readProjectFile,
+  updateProjectAgentsRules,
   runProjectVerify,
   resizeProjectTerminal,
   sendProjectTerminalInput,

@@ -18,6 +18,7 @@ const STOP_APP_WAIT_TIMEOUT_MS = 1200;
 const STOP_APP_FORCE_WAIT_TIMEOUT_MS = 800;
 const APP_RUN_HISTORY_DEFAULT_LIMIT = 30;
 const APP_RUN_HISTORY_MAX_LIMIT = 200;
+const CAPABILITY_TARGET_KINDS = new Set(["file", "folder", "any"]);
 
 let dbPromise = null;
 
@@ -78,6 +79,7 @@ async function initDb() {
       ui_kind TEXT,
       ui_value TEXT,
       env_json TEXT NOT NULL,
+      capabilities_json TEXT NOT NULL DEFAULT '[]',
       updated_at INTEGER NOT NULL
     );
   `);
@@ -86,6 +88,10 @@ async function initDb() {
   const hasTabId = columns.some((col) => col.name === "tab_id");
   if (!hasTabId) {
     await db.exec("ALTER TABLE apps ADD COLUMN tab_id TEXT NOT NULL DEFAULT 'workspace';");
+  }
+  const hasCapabilitiesJson = columns.some((col) => col.name === "capabilities_json");
+  if (!hasCapabilitiesJson) {
+    await db.exec("ALTER TABLE apps ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]';");
   }
 
   await db.exec(`
@@ -136,6 +142,84 @@ function normalizeTabId(value, fallback) {
     return "workspace";
   }
   return normalized;
+}
+
+function normalizeCapabilityId(value) {
+  const source = String(value ?? "").trim().toLowerCase();
+  return source
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeCapabilityTarget(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!CAPABILITY_TARGET_KINDS.has(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
+function parseCapabilityTargets(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set();
+  const targets = [];
+  for (let i = 0; i < input.length; i += 1) {
+    const normalized = normalizeCapabilityTarget(input[i]);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    targets.push(normalized);
+  }
+  return targets;
+}
+
+function parseManifestCapabilities(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set();
+  const capabilities = [];
+
+  for (let i = 0; i < input.length; i += 1) {
+    const item = input[i];
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const id = normalizeCapabilityId(item.id);
+    const name = String(item.name ?? "").trim();
+    if (!id || !name || seen.has(id)) {
+      continue;
+    }
+    const targets = parseCapabilityTargets(item.targets);
+    if (targets.length === 0) {
+      continue;
+    }
+    const descriptionSource =
+      typeof item.description === "string" ? item.description.trim() : "";
+    capabilities.push({
+      id,
+      name,
+      description: descriptionSource || null,
+      targets,
+    });
+    seen.add(id);
+  }
+
+  return capabilities;
+}
+
+function parseCapabilitiesJson(input) {
+  if (!input) {
+    return [];
+  }
+  try {
+    return parseManifestCapabilities(JSON.parse(String(input)));
+  } catch {
+    return [];
+  }
 }
 
 function normalizeStorageKey(keyInput) {
@@ -299,7 +383,7 @@ async function loadAppsRows(options = {}) {
 
   const db = await getDb();
   const rows = await db.all(
-    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json FROM apps ORDER BY name ASC",
+    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json FROM apps ORDER BY name ASC",
   );
   appsRowsCache = {
     rows: cloneRows(rows),
@@ -349,6 +433,7 @@ function parseManifestRecord(appDir, folderName, manifest) {
   const version = String(manifest.version ?? "0.0.0").trim();
   const entryRel = String(manifest.entry ?? "index.js").trim();
   const env = manifest.env && typeof manifest.env === "object" ? manifest.env : {};
+  const capabilities = parseManifestCapabilities(manifest.capabilities);
   const { uiKind, uiValue } = parseUi(manifest);
 
   if (!id || !name || !entryRel) {
@@ -364,6 +449,7 @@ function parseManifestRecord(appDir, folderName, manifest) {
     uiKind,
     uiValue,
     envJson: JSON.stringify(env),
+    capabilitiesJson: JSON.stringify(capabilities),
   };
 }
 
@@ -430,7 +516,8 @@ function hasAppRecordChanged(existing, incoming, tabId) {
     existing.entry_rel !== incoming.entryRel ||
     (existing.ui_kind ?? null) !== (incoming.uiKind ?? null) ||
     (existing.ui_value ?? null) !== (incoming.uiValue ?? null) ||
-    existing.env_json !== incoming.envJson
+    existing.env_json !== incoming.envJson ||
+    String(existing.capabilities_json ?? "[]") !== String(incoming.capabilitiesJson ?? "[]")
   );
 }
 
@@ -438,7 +525,7 @@ async function syncDiscoveredApps(discovered) {
   return runSerializedWrite(async () => {
     const db = await getDb();
     const existingRows = await db.all(
-      "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json FROM apps",
+      "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json FROM apps",
     );
     const existingById = new Map(existingRows.map((row) => [row.id, row]));
 
@@ -468,8 +555,8 @@ async function syncDiscoveredApps(discovered) {
 
         changed = true;
         await db.run(
-          `INSERT INTO apps(id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO apps(id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              name = excluded.name,
              version = excluded.version,
@@ -478,6 +565,7 @@ async function syncDiscoveredApps(discovered) {
              ui_kind = excluded.ui_kind,
              ui_value = excluded.ui_value,
              env_json = excluded.env_json,
+             capabilities_json = excluded.capabilities_json,
              updated_at = excluded.updated_at`,
           item.id,
           item.name,
@@ -488,6 +576,7 @@ async function syncDiscoveredApps(discovered) {
           item.uiKind,
           item.uiValue,
           item.envJson,
+          item.capabilitiesJson,
           now,
         );
       }
@@ -639,6 +728,7 @@ async function toAppView(record) {
     appDir: record.app_dir,
     entryRel: record.entry_rel,
     uiUrl: toUiUrl(record),
+    capabilities: parseCapabilitiesJson(record.capabilities_json),
     running: !!runtime,
     pid: runtime?.pid ?? null,
   };
@@ -655,7 +745,7 @@ async function listApps() {
 async function getAppRecord(appId) {
   const db = await getDb();
   return db.get(
-    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json FROM apps WHERE id = ?",
+    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json FROM apps WHERE id = ?",
     appId,
   );
 }
@@ -664,7 +754,7 @@ async function getAppRecordFresh(appId) {
   await scanAndSyncApps({ force: true });
   const db = await getDb();
   return db.get(
-    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json FROM apps WHERE id = ?",
+    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json FROM apps WHERE id = ?",
     appId,
   );
 }

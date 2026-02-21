@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   readGeneratorProjectFile(projectId, filePath) {
     return ipcRenderer.invoke("generator:read-project-file", projectId, filePath);
   },
+  updateGeneratorProjectAgents(projectId) {
+    return ipcRenderer.invoke("generator:update-project-agents", projectId);
+  },
   installGeneratorProjectApp(projectId, tabId, overwriteExisting, verifyCommandOverride) {
     return ipcRenderer.invoke(
       "generator:install-project",
@@ -138,8 +141,11 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   removeApp(appId) {
     return ipcRenderer.invoke("apps:remove", appId);
   },
-  openAppWindow(appId, launchPayload) {
-    return ipcRenderer.invoke("apps:open-window", appId, launchPayload);
+  openAppWindow(appId, launchContext) {
+    return ipcRenderer.invoke("apps:open-window", appId, launchContext);
+  },
+  dispatchAppCapability(payload) {
+    return ipcRenderer.invoke("apps:dispatch-capability", payload);
   },
   pickInstallDirectory() {
     return ipcRenderer.invoke("apps:pick-install-directory");
@@ -195,6 +201,40 @@ contextBridge.exposeInMainWorld("toolHubApi", {
     ipcRenderer.on("quick-launcher:open", listener);
     return () => {
       ipcRenderer.removeListener("quick-launcher:open", listener);
+    };
+  },
+  subscribeContextDispatchRequest(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const seenRequestIds = new Set();
+    const emitPayload = (payload) => {
+      const requestId = String(payload?.requestId ?? "").trim();
+      if (requestId) {
+        if (seenRequestIds.has(requestId)) {
+          return;
+        }
+        seenRequestIds.add(requestId);
+      }
+      callback(payload);
+    };
+    const listener = (_event, payload) => {
+      emitPayload(payload);
+    };
+    ipcRenderer.on("context-dispatch:request", listener);
+    void ipcRenderer
+      .invoke("context-dispatch:consume-pending")
+      .then((items) => {
+        if (!Array.isArray(items)) {
+          return;
+        }
+        items.forEach((item) => {
+          emitPayload(item);
+        });
+      })
+      .catch(() => {});
+    return () => {
+      ipcRenderer.removeListener("context-dispatch:request", listener);
     };
   },
 });

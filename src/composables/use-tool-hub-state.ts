@@ -187,6 +187,7 @@ function createToolHubState() {
     openGeneratorProjectFile,
     runGeneratorProjectValidation,
     runGeneratorProjectVerifyCheck,
+    updateGeneratorProjectAgentsRules,
     resizeEmbeddedTerminal,
     saveClaudePathConfig,
     selectGeneratorProject,
@@ -825,7 +826,7 @@ function createToolHubState() {
       // Open action now also ensures backend runtime is started.
       const list = await startApp(appId);
       applyApps(list);
-      await openAppWindow(appId);
+      await openAppWindow(appId, { source: "manual" });
       appsStatus.value = "success";
       appsMessage.value = `App opened: ${appId}`;
       await loadAppLogs(appId);
@@ -1117,6 +1118,7 @@ function createToolHubState() {
     openGeneratorProjectFile,
     runGeneratorProjectValidation,
     runGeneratorProjectVerifyCheck,
+    updateGeneratorProjectAgentsRules,
     openNodeAppWindow,
     moveTabRow,
     moveTabRowTo,
