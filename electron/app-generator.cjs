@@ -14,6 +14,7 @@ const TOOL_HUB_ROOT_DIR = ".tool-hub";
 const GENERATOR_DIR_NAME = "generator";
 const METADATA_FILE_NAME = ".toolhub-generator.json";
 const TEMPLATE_DIR_REL = "../templates/node-hello-app";
+const TEMPLATE_DIR_RESOURCE_SEGMENTS = ["templates", "node-hello-app"];
 const TEMPLATE_AGENTS_FILE_NAME = "AGENTS.md";
 const TEMPLATE_AGENTS_ASSET_FILE_NAME = "node-hello-app-agents-template.txt";
 
@@ -59,8 +60,22 @@ function resolveGeneratorRoot() {
   return path.join(resolveToolHubRoot(), GENERATOR_DIR_NAME);
 }
 
+function resolveTemplateDirCandidates() {
+  return uniqueStrings([
+    path.resolve(__dirname, TEMPLATE_DIR_REL),
+    path.join(process.resourcesPath, ...TEMPLATE_DIR_RESOURCE_SEGMENTS),
+  ]);
+}
+
 function resolveTemplateDir() {
-  return path.resolve(__dirname, TEMPLATE_DIR_REL);
+  const candidates = resolveTemplateDirCandidates();
+  for (let i = 0; i < candidates.length; i += 1) {
+    const item = candidates[i];
+    if (fs.existsSync(item) && fs.statSync(item).isDirectory()) {
+      return item;
+    }
+  }
+  return candidates[0];
 }
 
 function resolveProjectMetadataPath(projectDir) {
@@ -525,9 +540,12 @@ function ensureUniqueProjectId(baseId) {
 }
 
 function createProject(projectName) {
+  const templateCandidates = resolveTemplateDirCandidates();
   const templateDir = resolveTemplateDir();
   if (!fs.existsSync(templateDir) || !fs.statSync(templateDir).isDirectory()) {
-    throw new Error(`Template directory not found: ${templateDir}`);
+    throw new Error(
+      `Template directory not found. Checked: ${templateCandidates.join(" | ")}`,
+    );
   }
 
   const root = resolveGeneratorRoot();
@@ -601,17 +619,14 @@ function readProjectFile(projectIdInput, filePathInput) {
 }
 
 function resolveTemplateAgentsSourcePath() {
-  const candidates = [
-    path.join(resolveTemplateDir(), TEMPLATE_AGENTS_FILE_NAME),
-    path.join(
-      process.resourcesPath,
-      "templates",
-      "node-hello-app",
-      TEMPLATE_AGENTS_FILE_NAME,
-    ),
+  const templateCandidates = resolveTemplateDirCandidates().map((templateDir) =>
+    path.join(templateDir, TEMPLATE_AGENTS_FILE_NAME),
+  );
+  const candidates = uniqueStrings([
+    ...templateCandidates,
     path.join(__dirname, "assets", TEMPLATE_AGENTS_ASSET_FILE_NAME),
     path.join(process.resourcesPath, "assets", TEMPLATE_AGENTS_ASSET_FILE_NAME),
-  ];
+  ]);
 
   for (let i = 0; i < candidates.length; i += 1) {
     const item = candidates[i];

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1] - 2026-02-21
+
+### Fixed
+- 修复安装版创建 Generator 项目失败问题：模板目录解析增加 `resources/templates/node-hello-app` 回退，避免仅按 `app.asar` 路径查找导致 `Template directory not found`。
+
+### Changed
+- 打包配置调整为将 `templates/node-hello-app` 全量包含到 `extraResources`，确保发布版可复制完整模板项目文件。
+
 ## [0.2.0] - 2026-02-21
 
 ### Added
