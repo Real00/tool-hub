@@ -40,8 +40,20 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   readGeneratorProjectFile(projectId, filePath) {
     return ipcRenderer.invoke("generator:read-project-file", projectId, filePath);
   },
-  installGeneratorProjectApp(projectId, tabId, overwriteExisting) {
-    return ipcRenderer.invoke("generator:install-project", projectId, tabId, overwriteExisting);
+  installGeneratorProjectApp(projectId, tabId, overwriteExisting, verifyCommandOverride) {
+    return ipcRenderer.invoke(
+      "generator:install-project",
+      projectId,
+      tabId,
+      overwriteExisting,
+      verifyCommandOverride,
+    );
+  },
+  validateGeneratorProject(projectId, tabId) {
+    return ipcRenderer.invoke("generator:validate-project", projectId, tabId);
+  },
+  runGeneratorProjectVerify(projectId, commandOverride) {
+    return ipcRenderer.invoke("generator:run-verify", projectId, commandOverride);
   },
   getGeneratorProjectTerminal(projectId) {
     return ipcRenderer.invoke("generator:get-terminal", projectId);

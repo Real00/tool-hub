@@ -11,6 +11,7 @@ const DEFAULT_TABS = [
   { id: "monitoring", label: "监控" },
   { id: "security", label: "安全" },
 ];
+const DEFAULT_VERIFY_COMMAND = "node --check src/index.js";
 
 let dbPromise = null;
 
@@ -179,14 +180,33 @@ async function closeSettingsStore() {
 async function getGeneratorSettings() {
   const db = await getDb();
   const claudeCliPath = await getGeneratorSettingValue(db, "claude_cli_path", "");
-  return { claudeCliPath };
+  const verifyCommand = await getGeneratorSettingValue(
+    db,
+    "generator_verify_command",
+    DEFAULT_VERIFY_COMMAND,
+  );
+  return {
+    claudeCliPath,
+    verifyCommand: String(verifyCommand ?? DEFAULT_VERIFY_COMMAND).trim() || DEFAULT_VERIFY_COMMAND,
+  };
 }
 
 async function saveGeneratorSettings(input) {
   const claudeCliPath = String(input?.claudeCliPath ?? "").trim();
+  const verifyCommand =
+    String(input?.verifyCommand ?? DEFAULT_VERIFY_COMMAND).trim() ||
+    DEFAULT_VERIFY_COMMAND;
   const db = await getDb();
   await setGeneratorSettingValue(db, "claude_cli_path", claudeCliPath);
-  return { claudeCliPath };
+  await setGeneratorSettingValue(
+    db,
+    "generator_verify_command",
+    verifyCommand,
+  );
+  return {
+    claudeCliPath,
+    verifyCommand,
+  };
 }
 
 module.exports = {

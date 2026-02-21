@@ -4,6 +4,8 @@ import type {
   GeneratorProjectDetail,
   GeneratorProjectSummary,
   GeneratorTerminalState,
+  GeneratorValidationResult,
+  GeneratorVerifyResult,
 } from "../types/generator";
 import type { TabDefinition } from "../types/settings";
 import {
@@ -17,11 +19,13 @@ import {
   listGeneratorProjects,
   readGeneratorProjectFile,
   resizeGeneratorProjectTerminal,
+  runGeneratorProjectVerify as runGeneratorProjectVerifyBridge,
   saveGeneratorSettings,
   sendGeneratorProjectTerminalInput,
   subscribeGeneratorProjectTerminal,
   startGeneratorProjectTerminal,
   stopGeneratorProjectTerminal,
+  validateGeneratorProject,
 } from "../platform/electron-bridge";
 
 interface InstallResultPayload {
@@ -43,6 +47,8 @@ function formatError(error: unknown): string {
 }
 
 const APP_ALREADY_INSTALLED_PREFIX = "APP_ALREADY_INSTALLED:";
+const GENERATOR_VALIDATION_ERROR_PREFIX = "GENERATOR_VALIDATION_FAILED:";
+const GENERATOR_VERIFY_ERROR_PREFIX = "GENERATOR_VERIFY_FAILED:";
 
 function parseAlreadyInstalledAppId(error: unknown): string | null {
   const message = formatError(error).trim();
@@ -52,6 +58,64 @@ function parseAlreadyInstalledAppId(error: unknown): string | null {
     return String(match[1] ?? "").trim() || "";
   }
   return null;
+}
+
+function decodeBase64Url(input: string): string | null {
+  const source = String(input ?? "").trim();
+  if (!source) {
+    return null;
+  }
+  try {
+    const base64 = source.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = `${base64}${"=".repeat((4 - (base64.length % 4)) % 4)}`;
+    if (typeof atob === "function") {
+      const binary = atob(padded);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new TextDecoder().decode(bytes);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function parseGeneratorPayloadError<T>(error: unknown, prefix: string): T | null {
+  const message = formatError(error).trim();
+  if (!message.startsWith(prefix)) {
+    return null;
+  }
+  const encoded = message.slice(prefix.length).trim();
+  const decoded = decodeBase64Url(encoded);
+  if (!decoded) {
+    return null;
+  }
+  try {
+    return JSON.parse(decoded) as T;
+  } catch {
+    return null;
+  }
+}
+
+function createVerifyResultFromError(
+  projectId: string,
+  command: string,
+  message: string,
+): GeneratorVerifyResult {
+  const finishedAt = Date.now();
+  return {
+    projectId,
+    command,
+    success: false,
+    exitCode: null,
+    output: message,
+    truncated: false,
+    startedAt: finishedAt,
+    finishedAt,
+    durationMs: 0,
+  };
 }
 
 function toSummary(project: GeneratorProjectDetail): GeneratorProjectSummary {
@@ -120,6 +184,7 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
   const generatorStatus = ref<"idle" | "loading" | "success" | "error">("idle");
   const generatorMessage = ref("Use Claude CLI to edit files in generator projects.");
   const claudeCliPath = ref("");
+  const verifyCommand = ref("node --check src/index.js");
   const generatorProjectName = ref("");
   const generatorTabId = ref(options.tabs.value[0]?.id ?? "workspace");
 
@@ -131,6 +196,16 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
   const generatorFileContent = ref("");
   const generatorFileTruncated = ref(false);
   const generatorFileLoading = ref(false);
+  const generatorValidationResult = ref<GeneratorValidationResult | null>(null);
+  const generatorValidationStatus = ref<"idle" | "loading" | "success" | "error">("idle");
+  const generatorValidationMessage = ref(
+    "Validation checks app.json and project files before install.",
+  );
+  const generatorVerifyResult = ref<GeneratorVerifyResult | null>(null);
+  const generatorVerifyStatus = ref<"idle" | "loading" | "success" | "error">("idle");
+  const generatorVerifyMessage = ref(
+    "Verify command will run automatically before install.",
+  );
   const generatorTerminal = ref<GeneratorTerminalState>(emptyTerminalState(""));
   const generatorTerminalStatus = ref<"idle" | "loading" | "success" | "error">("idle");
   const generatorTerminalMessage = ref("Embedded terminal is ready.");
@@ -150,6 +225,14 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorFilePath.value = "";
     generatorFileContent.value = "";
     generatorFileTruncated.value = false;
+    generatorValidationResult.value = null;
+    generatorValidationStatus.value = "idle";
+    generatorValidationMessage.value =
+      "Validation checks app.json and project files before install.";
+    generatorVerifyResult.value = null;
+    generatorVerifyStatus.value = "idle";
+    generatorVerifyMessage.value =
+      "Verify command will run automatically before install.";
     generatorTerminal.value = emptyTerminalState("");
     generatorTerminalStatus.value = "idle";
     generatorTerminalMessage.value = "Embedded terminal is ready.";
@@ -216,9 +299,10 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     try {
       const settings = await getGeneratorSettings();
       claudeCliPath.value = settings.claudeCliPath;
+      verifyCommand.value = settings.verifyCommand;
       generatorStatus.value = "idle";
       generatorMessage.value = settings.claudeCliPath
-        ? "Claude CLI path loaded from local settings."
+        ? "Generator settings loaded from local storage."
         : "Claude CLI path is empty. Auto-detect or set it manually.";
     } catch (error) {
       generatorStatus.value = "error";
@@ -387,12 +471,14 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorMessage.value = "Saving Claude CLI path...";
 
     try {
-      const saved = await saveGeneratorSettings({ claudeCliPath: claudeCliPath.value.trim() });
+      const saved = await saveGeneratorSettings({
+        claudeCliPath: claudeCliPath.value.trim(),
+        verifyCommand: verifyCommand.value.trim(),
+      });
       claudeCliPath.value = saved.claudeCliPath;
+      verifyCommand.value = saved.verifyCommand;
       generatorStatus.value = "success";
-      generatorMessage.value = saved.claudeCliPath
-        ? "Claude CLI path saved."
-        : "Claude CLI path cleared.";
+      generatorMessage.value = "Generator settings saved.";
     } catch (error) {
       generatorStatus.value = "error";
       generatorMessage.value = `Save failed: ${formatError(error)}`;
@@ -518,6 +604,137 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     }
   }
 
+  function applyValidationResult(result: GeneratorValidationResult) {
+    generatorValidationResult.value = result;
+    const errorCount = result.errors.length;
+    const warningCount = result.warnings.length;
+    if (errorCount > 0) {
+      generatorValidationStatus.value = "error";
+      generatorValidationMessage.value = `Validation failed with ${errorCount} error(s) and ${warningCount} warning(s).`;
+      return;
+    }
+    generatorValidationStatus.value = "success";
+    generatorValidationMessage.value = `Validation passed with ${warningCount} warning(s).`;
+  }
+
+  function applyVerifyResult(result: GeneratorVerifyResult) {
+    generatorVerifyResult.value = result;
+    if (result.success) {
+      generatorVerifyStatus.value = "success";
+      generatorVerifyMessage.value = `Verify passed (${result.command}) in ${result.durationMs} ms.`;
+      return;
+    }
+    generatorVerifyStatus.value = "error";
+    generatorVerifyMessage.value = `Verify failed (${result.command}) with exit code ${result.exitCode ?? "null"}.`;
+  }
+
+  function handleStructuredGeneratorError(error: unknown): boolean {
+    const validationPayload = parseGeneratorPayloadError<{
+      validation?: GeneratorValidationResult;
+      message?: string;
+    }>(error, GENERATOR_VALIDATION_ERROR_PREFIX);
+    if (validationPayload?.validation) {
+      applyValidationResult(validationPayload.validation);
+      generatorStatus.value = "error";
+      generatorMessage.value =
+        validationPayload.message ||
+        "Install blocked by project validation errors.";
+      return true;
+    }
+
+    const verifyPayload = parseGeneratorPayloadError<{
+      verify?: GeneratorVerifyResult;
+      message?: string;
+    }>(error, GENERATOR_VERIFY_ERROR_PREFIX);
+    if (verifyPayload?.verify) {
+      applyVerifyResult(verifyPayload.verify);
+      generatorStatus.value = "error";
+      generatorMessage.value =
+        verifyPayload.message ||
+        "Install blocked because verify command failed.";
+      return true;
+    }
+
+    return false;
+  }
+
+  async function runGeneratorProjectValidation() {
+    if (!isElectronRuntime()) {
+      generatorValidationStatus.value = "error";
+      generatorValidationMessage.value = "Validation is only available in Electron runtime.";
+      return;
+    }
+    if (!generatorProjectId.value) {
+      generatorValidationStatus.value = "error";
+      generatorValidationMessage.value = "Please select a project first.";
+      return;
+    }
+
+    generatorValidationStatus.value = "loading";
+    generatorValidationMessage.value = "Running validation checks...";
+    try {
+      const result = await validateGeneratorProject(
+        generatorProjectId.value,
+        generatorTabId.value,
+      );
+      applyValidationResult(result);
+      generatorStatus.value = result.ok ? "success" : "error";
+      generatorMessage.value = result.ok
+        ? "Validation completed."
+        : "Validation failed. Fix errors before install.";
+    } catch (error) {
+      generatorValidationStatus.value = "error";
+      generatorValidationMessage.value = `Validation failed: ${formatError(error)}`;
+      generatorStatus.value = "error";
+      generatorMessage.value = `Validation failed: ${formatError(error)}`;
+    }
+  }
+
+  async function runGeneratorProjectVerifyCheck() {
+    if (!isElectronRuntime()) {
+      generatorVerifyStatus.value = "error";
+      generatorVerifyMessage.value = "Verify is only available in Electron runtime.";
+      return;
+    }
+    if (!generatorProjectId.value) {
+      generatorVerifyStatus.value = "error";
+      generatorVerifyMessage.value = "Please select a project first.";
+      return;
+    }
+
+    generatorVerifyStatus.value = "loading";
+    generatorVerifyMessage.value = "Running verify command...";
+    try {
+      const result = await runGeneratorProjectVerifyBridge(
+        generatorProjectId.value,
+        verifyCommand.value.trim(),
+      );
+      applyVerifyResult(result);
+      generatorStatus.value = result.success ? "success" : "error";
+      generatorMessage.value = result.success
+        ? "Verify completed."
+        : "Verify failed. Install is blocked.";
+    } catch (error) {
+      const fallback = createVerifyResultFromError(
+        generatorProjectId.value,
+        verifyCommand.value.trim() || "verify",
+        `Verify failed: ${formatError(error)}`,
+      );
+      applyVerifyResult(fallback);
+      generatorStatus.value = "error";
+      generatorMessage.value = `Verify failed: ${formatError(error)}`;
+    }
+  }
+
+  async function executeInstall(overwriteExisting: boolean) {
+    return installGeneratorProjectApp(
+      generatorProjectId.value,
+      generatorTabId.value,
+      overwriteExisting,
+      verifyCommand.value.trim(),
+    );
+  }
+
   async function installAppFromGeneratorProject() {
     if (!isElectronRuntime()) {
       generatorStatus.value = "error";
@@ -541,13 +758,11 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorMessage.value = "Installing app from selected project...";
 
     try {
-      const result = await installGeneratorProjectApp(
-        generatorProjectId.value,
-        generatorTabId.value,
-        false,
-      );
+      const result = await executeInstall(false);
       generatorProject.value = result.project;
       upsertProjectSummary(toSummary(result.project));
+      applyValidationResult(result.validation);
+      applyVerifyResult(result.verify);
       await loadGeneratorProjects();
       options.onInstalled?.({
         apps: result.installedApps,
@@ -557,6 +772,9 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
       generatorStatus.value = "success";
       generatorMessage.value = "Project app installed successfully.";
     } catch (error) {
+      if (handleStructuredGeneratorError(error)) {
+        return;
+      }
       const existingAppId = parseAlreadyInstalledAppId(error);
       if (existingAppId !== null) {
         const displayId = existingAppId || "this app";
@@ -572,13 +790,11 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
         generatorStatus.value = "loading";
         generatorMessage.value = `Overwriting app "${displayId}"...`;
         try {
-          const result = await installGeneratorProjectApp(
-            generatorProjectId.value,
-            generatorTabId.value,
-            true,
-          );
+          const result = await executeInstall(true);
           generatorProject.value = result.project;
           upsertProjectSummary(toSummary(result.project));
+          applyValidationResult(result.validation);
+          applyVerifyResult(result.verify);
           await loadGeneratorProjects();
           options.onInstalled?.({
             apps: result.installedApps,
@@ -589,6 +805,9 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
           generatorMessage.value = "Project app overwritten successfully.";
           return;
         } catch (overwriteError) {
+          if (handleStructuredGeneratorError(overwriteError)) {
+            return;
+          }
           generatorStatus.value = "error";
           generatorMessage.value = `Overwrite failed: ${formatError(overwriteError)}`;
           return;
@@ -615,6 +834,12 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     generatorProjects,
     generatorStatus,
     generatorTabId,
+    generatorValidationMessage,
+    generatorValidationResult,
+    generatorValidationStatus,
+    generatorVerifyMessage,
+    generatorVerifyResult,
+    generatorVerifyStatus,
     generatorTerminal,
     generatorTerminalMessage,
     generatorTerminalStatus,
@@ -623,6 +848,8 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     loadGeneratorSettingsFromStorage,
     loadGeneratorTerminalState,
     openGeneratorProjectFile,
+    runGeneratorProjectValidation,
+    runGeneratorProjectVerifyCheck,
     saveClaudePathConfig,
     selectGeneratorProject,
     startEmbeddedTerminal,
@@ -631,5 +858,6 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
     sendEmbeddedTerminalData,
     resizeEmbeddedTerminal,
     syncGeneratorTabIdWithTabs,
+    verifyCommand,
   };
 }

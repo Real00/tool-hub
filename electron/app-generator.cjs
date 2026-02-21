@@ -19,6 +19,12 @@ const CHAT_TIMEOUT_MS = 240000;
 const MAX_OUTPUT_CHARS = 2_000_000;
 const MAX_FILE_READ_BYTES = 200000;
 const TERMINAL_OUTPUT_MAX_CHARS = 200000;
+const VERIFY_TIMEOUT_MS = 600000;
+const VERIFY_OUTPUT_MAX_CHARS = 50000;
+const DEFAULT_VERIFY_COMMAND = "node --check src/index.js";
+const LEGACY_VERIFY_COMMAND = "pnpm typecheck";
+const GENERATOR_VALIDATION_ERROR_PREFIX = "GENERATOR_VALIDATION_FAILED:";
+const GENERATOR_VERIFY_ERROR_PREFIX = "GENERATOR_VERIFY_FAILED:";
 
 const terminalRuntime = new Map();
 const terminalSubscribers = new Map();
@@ -80,6 +86,76 @@ function normalizeTabId(value, fallback = "workspace") {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized || "workspace";
+}
+
+function normalizeVerifyCommand(value) {
+  const normalized = String(value ?? "").trim();
+  return normalized || DEFAULT_VERIFY_COMMAND;
+}
+
+function hasPackageManifest(projectDir) {
+  const manifestNames = [
+    "package.json",
+    "package.yaml",
+    "package.yml",
+    "package.json5",
+  ];
+  for (let i = 0; i < manifestNames.length; i += 1) {
+    const manifestPath = path.join(projectDir, manifestNames[i]);
+    if (fs.existsSync(manifestPath) && fs.statSync(manifestPath).isFile()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isLegacyVerifyCommand(commandInput) {
+  return String(commandInput ?? "").trim().toLowerCase() === LEGACY_VERIFY_COMMAND;
+}
+
+function resolveAutoVerifyCommand(projectDir) {
+  const manifestPath = path.join(projectDir, "app.json");
+  if (!fs.existsSync(manifestPath) || !fs.statSync(manifestPath).isFile()) {
+    return null;
+  }
+
+  let manifest = null;
+  try {
+    manifest = readJson(manifestPath);
+  } catch {
+    return null;
+  }
+
+  const entryRel = String(manifest?.entry ?? "").trim();
+  if (!entryRel) {
+    return null;
+  }
+
+  let resolved = null;
+  try {
+    resolved = resolveProjectFile(projectDir, entryRel);
+  } catch {
+    return null;
+  }
+
+  if (
+    !resolved?.absolutePath ||
+    !fs.existsSync(resolved.absolutePath) ||
+    !fs.statSync(resolved.absolutePath).isFile()
+  ) {
+    return null;
+  }
+
+  return `node --check "${resolved.filePath}"`;
+}
+
+function encodeErrorPayload(payload) {
+  try {
+    const json = JSON.stringify(payload ?? {});
+    return Buffer.from(json, "utf8").toString("base64url");
+  } catch {
+    return "";
+  }
 }
 
 function defaultProjectMetadata() {
@@ -522,6 +598,363 @@ function readProjectFile(projectIdInput, filePathInput) {
   };
 }
 
+function createValidationIssue(level, code, message, filePath = undefined) {
+  const issue = {
+    code: String(code),
+    level: level === "warning" ? "warning" : "error",
+    message: String(message),
+  };
+  if (filePath) {
+    issue.path = String(filePath);
+  }
+  return issue;
+}
+
+function createValidationCheck(code, status, message, filePath = undefined) {
+  const check = {
+    code: String(code),
+    status:
+      status === "warning" || status === "error"
+        ? status
+        : "pass",
+    message: String(message),
+  };
+  if (filePath) {
+    check.path = String(filePath);
+  }
+  return check;
+}
+
+function validateProject(projectIdInput, requestedTabId) {
+  const { projectId, projectDir } = resolveProjectDir(projectIdInput);
+  const errors = [];
+  const warnings = [];
+  const checks = [];
+  const validatedAt = now();
+  const manifestPath = "app.json";
+  const manifestAbsPath = path.join(projectDir, manifestPath);
+  const requestedTabText = String(requestedTabId ?? "").trim();
+  const targetTabId = requestedTabText
+    ? normalizeTabId(requestedTabText, "workspace")
+    : null;
+
+  function addError(code, message, filePath) {
+    const issue = createValidationIssue("error", code, message, filePath);
+    errors.push(issue);
+    checks.push(createValidationCheck(code, "error", message, filePath));
+  }
+
+  function addWarning(code, message, filePath) {
+    const issue = createValidationIssue("warning", code, message, filePath);
+    warnings.push(issue);
+    checks.push(createValidationCheck(code, "warning", message, filePath));
+  }
+
+  function addPass(code, message, filePath) {
+    checks.push(createValidationCheck(code, "pass", message, filePath));
+  }
+
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
+    addError("PROJECT_DIRECTORY_MISSING", "Project directory does not exist.");
+    return {
+      projectId,
+      validatedAt,
+      ok: false,
+      errors,
+      warnings,
+      checks,
+      manifestPath,
+      normalizedAppId: null,
+      targetTabId,
+    };
+  }
+
+  if (!fs.existsSync(manifestAbsPath) || !fs.statSync(manifestAbsPath).isFile()) {
+    addError(
+      "MANIFEST_NOT_FOUND",
+      "app.json is required before install.",
+      manifestPath,
+    );
+    return {
+      projectId,
+      validatedAt,
+      ok: false,
+      errors,
+      warnings,
+      checks,
+      manifestPath,
+      normalizedAppId: null,
+      targetTabId,
+    };
+  }
+  addPass("MANIFEST_EXISTS", "app.json found.", manifestPath);
+
+  let manifest = null;
+  try {
+    manifest = readJson(manifestAbsPath);
+    addPass("MANIFEST_JSON_VALID", "app.json is valid JSON.", manifestPath);
+  } catch (error) {
+    addError(
+      "MANIFEST_JSON_INVALID",
+      `app.json cannot be parsed: ${error instanceof Error ? error.message : String(error)}`,
+      manifestPath,
+    );
+    return {
+      projectId,
+      validatedAt,
+      ok: false,
+      errors,
+      warnings,
+      checks,
+      manifestPath,
+      normalizedAppId: null,
+      targetTabId,
+    };
+  }
+
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    addError("MANIFEST_OBJECT_REQUIRED", "app.json root must be an object.", manifestPath);
+    return {
+      projectId,
+      validatedAt,
+      ok: false,
+      errors,
+      warnings,
+      checks,
+      manifestPath,
+      normalizedAppId: null,
+      targetTabId,
+    };
+  }
+
+  const normalizedAppId = normalizeAppId(manifest.id, "");
+  if (!normalizedAppId) {
+    addError("APP_ID_INVALID", "app.json field `id` is required and must be valid.", manifestPath);
+  } else {
+    addPass("APP_ID_VALID", `App id: ${normalizedAppId}`, manifestPath);
+  }
+
+  const appName = String(manifest.name ?? "").trim();
+  if (!appName) {
+    addError("APP_NAME_REQUIRED", "app.json field `name` is required.", manifestPath);
+  } else {
+    addPass("APP_NAME_VALID", `App name: ${appName}`, manifestPath);
+  }
+
+  const version = String(manifest.version ?? "").trim();
+  if (!version) {
+    addWarning("APP_VERSION_MISSING", "app.json field `version` is missing.");
+  } else {
+    addPass("APP_VERSION_PRESENT", `App version: ${version}`, manifestPath);
+  }
+
+  const entryRel = String(manifest.entry ?? "").trim();
+  if (!entryRel) {
+    addError("APP_ENTRY_MISSING", "app.json field `entry` is required.", manifestPath);
+  } else {
+    try {
+      const { absolutePath, filePath } = resolveProjectFile(projectDir, entryRel);
+      if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+        addError("APP_ENTRY_NOT_FOUND", `Entry file not found: ${filePath}`, filePath);
+      } else {
+        addPass("APP_ENTRY_OK", `Entry file found: ${filePath}`, filePath);
+      }
+    } catch (error) {
+      addError(
+        "APP_ENTRY_INVALID",
+        `Invalid entry path: ${error instanceof Error ? error.message : String(error)}`,
+        manifestPath,
+      );
+    }
+  }
+
+  const uiPathRaw = manifest.uiPath;
+  const uiPath = typeof uiPathRaw === "string" ? uiPathRaw.trim() : "";
+  if (typeof uiPathRaw !== "undefined" && typeof uiPathRaw !== "string") {
+    addError("UI_PATH_INVALID_TYPE", "`uiPath` must be a string when provided.", manifestPath);
+  } else if (uiPath) {
+    try {
+      const { absolutePath, filePath } = resolveProjectFile(projectDir, uiPath);
+      if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
+        addError("UI_PATH_NOT_FOUND", `uiPath file not found: ${filePath}`, filePath);
+      } else {
+        addPass("UI_PATH_OK", `uiPath file found: ${filePath}`, filePath);
+      }
+    } catch (error) {
+      addError(
+        "UI_PATH_INVALID",
+        `Invalid uiPath: ${error instanceof Error ? error.message : String(error)}`,
+        manifestPath,
+      );
+    }
+  } else {
+    addPass("UI_PATH_OPTIONAL", "uiPath is optional.");
+  }
+
+  const uiUrlRaw = manifest.uiUrl;
+  const uiUrl = typeof uiUrlRaw === "string" ? uiUrlRaw.trim() : "";
+  if (typeof uiUrlRaw !== "undefined" && typeof uiUrlRaw !== "string") {
+    addError("UI_URL_INVALID_TYPE", "`uiUrl` must be a string when provided.", manifestPath);
+  } else if (uiUrl) {
+    if (!/^https?:\/\//i.test(uiUrl)) {
+      addError("UI_URL_INVALID", "uiUrl must start with http:// or https://.", manifestPath);
+    } else {
+      addPass("UI_URL_OK", `uiUrl is valid: ${uiUrl}`, manifestPath);
+    }
+  } else {
+    addPass("UI_URL_OPTIONAL", "uiUrl is optional.");
+  }
+
+  if (uiPath && uiUrl) {
+    addWarning(
+      "UI_PATH_AND_URL_BOTH_SET",
+      "Both uiPath and uiUrl are set; uiUrl takes precedence when app opens.",
+      manifestPath,
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(manifest, "env")) {
+    if (
+      manifest.env &&
+      typeof manifest.env === "object" &&
+      !Array.isArray(manifest.env)
+    ) {
+      addPass("ENV_OBJECT_OK", "`env` is an object.", manifestPath);
+    } else {
+      addWarning("ENV_NOT_OBJECT", "`env` should be an object.", manifestPath);
+    }
+  } else {
+    addPass("ENV_OPTIONAL", "`env` is optional.");
+  }
+
+  if (!requestedTabText) {
+    addWarning(
+      "TARGET_TAB_EMPTY",
+      "Target tab is empty; install flow will fallback to workspace.",
+    );
+  } else {
+    addPass(
+      "TARGET_TAB_SET",
+      `Target tab: ${targetTabId}`,
+    );
+  }
+
+  return {
+    projectId,
+    validatedAt,
+    ok: errors.length === 0,
+    errors,
+    warnings,
+    checks,
+    manifestPath,
+    normalizedAppId: normalizedAppId || null,
+    targetTabId,
+  };
+}
+
+function runCommandLine(commandLineInput, options = {}) {
+  return new Promise((resolve, reject) => {
+    const commandLine = String(commandLineInput ?? "").trim();
+    if (!commandLine) {
+      reject(new Error("Command line is empty."));
+      return;
+    }
+
+    const timeoutMs =
+      Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+        ? Math.max(1000, Math.floor(Number(options.timeoutMs)))
+        : VERIFY_TIMEOUT_MS;
+    const maxOutputChars =
+      Number.isFinite(Number(options.maxOutputChars)) &&
+      Number(options.maxOutputChars) > 0
+        ? Math.max(512, Math.floor(Number(options.maxOutputChars)))
+        : VERIFY_OUTPUT_MAX_CHARS;
+    let output = "";
+    let truncated = false;
+    let settled = false;
+
+    const child = spawn(commandLine, {
+      cwd: options.cwd,
+      env: { ...process.env, ...(options.env || {}) },
+      shell: true,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    function appendOutput(chunk) {
+      const text = String(chunk ?? "");
+      if (!text) {
+        return;
+      }
+      if (output.length >= maxOutputChars) {
+        truncated = true;
+        return;
+      }
+      const remain = maxOutputChars - output.length;
+      if (text.length <= remain) {
+        output += text;
+        return;
+      }
+      output += text.slice(0, remain);
+      truncated = true;
+    }
+
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        child.kill();
+      } catch {
+        // Ignore kill errors for terminated child process.
+      }
+      resolve({
+        code: null,
+        output,
+        truncated,
+        timedOut: true,
+      });
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk) => {
+      appendOutput(chunk);
+      if (typeof options.onStdout === "function") {
+        options.onStdout(chunk);
+      }
+    });
+    child.stderr?.on("data", (chunk) => {
+      appendOutput(chunk);
+      if (typeof options.onStderr === "function") {
+        options.onStderr(chunk);
+      }
+    });
+
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        code: Number.isInteger(code) ? Number(code) : null,
+        output,
+        truncated,
+        timedOut: false,
+      });
+    });
+  });
+}
+
 function getProjectTerminal(projectIdInput) {
   const { projectId, projectDir } = resolveProjectDir(projectIdInput);
   if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
@@ -769,16 +1202,27 @@ async function probeClaudeCommand(command) {
 
 async function getGeneratorSettings(settingsStore) {
   if (!settingsStore?.getGeneratorSettings) {
-    return { claudeCliPath: "" };
+    return {
+      claudeCliPath: "",
+      verifyCommand: DEFAULT_VERIFY_COMMAND,
+    };
   }
-  return settingsStore.getGeneratorSettings();
+  const saved = await settingsStore.getGeneratorSettings();
+  return {
+    claudeCliPath: String(saved?.claudeCliPath ?? "").trim(),
+    verifyCommand: normalizeVerifyCommand(saved?.verifyCommand),
+  };
 }
 
 async function saveGeneratorSettings(settingsStore, input) {
+  const normalizedInput = {
+    claudeCliPath: String(input?.claudeCliPath ?? "").trim(),
+    verifyCommand: normalizeVerifyCommand(input?.verifyCommand),
+  };
   if (!settingsStore?.saveGeneratorSettings) {
-    return { claudeCliPath: String(input?.claudeCliPath ?? "").trim() };
+    return normalizedInput;
   }
-  return settingsStore.saveGeneratorSettings(input);
+  return settingsStore.saveGeneratorSettings(normalizedInput);
 }
 
 async function detectClaudeCli(settingsStore) {
@@ -817,7 +1261,89 @@ async function detectClaudeCli(settingsStore) {
   };
 }
 
-async function installProjectApp(appsManager, projectIdInput, requestedTabId, overwriteExisting = false) {
+async function runProjectVerify(
+  projectIdInput,
+  settingsStore,
+  commandOverrideInput,
+) {
+  const { projectId, projectDir } = resolveProjectDir(projectIdInput);
+  const terminal = ensureTerminalState(projectId);
+  if (terminal.running) {
+    throw new Error("Project terminal is running. Please stop it before verify.");
+  }
+
+  const saved = await getGeneratorSettings(settingsStore);
+  const configuredCommand = String(commandOverrideInput || saved.verifyCommand || "").trim();
+  let command = normalizeVerifyCommand(configuredCommand);
+  let commandRewriteNote = "";
+  if (isLegacyVerifyCommand(command) && !hasPackageManifest(projectDir)) {
+    const autoCommand = resolveAutoVerifyCommand(projectDir);
+    if (autoCommand) {
+      commandRewriteNote =
+        `[tool-hub] verify command "${LEGACY_VERIFY_COMMAND}" requires package.json.\n` +
+        `[tool-hub] switched to "${autoCommand}" for this project.\n`;
+      command = autoCommand;
+    }
+  }
+  const startedAt = now();
+  let execution = null;
+
+  try {
+    execution = await runCommandLine(command, {
+      cwd: projectDir,
+      timeoutMs: VERIFY_TIMEOUT_MS,
+      maxOutputChars: VERIFY_OUTPUT_MAX_CHARS,
+    });
+  } catch (error) {
+    execution = {
+      code: null,
+      output: `Failed to execute verify command: ${error instanceof Error ? error.message : String(error)}`,
+      truncated: false,
+      timedOut: false,
+    };
+  }
+
+  const finishedAt = now();
+  const timedOut = execution.timedOut === true;
+  let output = `${commandRewriteNote}${String(execution.output ?? "")}`;
+  if (timedOut) {
+    output = `${output}\n[tool-hub] verify command timed out after ${VERIFY_TIMEOUT_MS} ms`;
+  }
+  if (output.length > VERIFY_OUTPUT_MAX_CHARS) {
+    output = output.slice(output.length - VERIFY_OUTPUT_MAX_CHARS);
+  }
+
+  const result = {
+    projectId,
+    command,
+    success:
+      Number.isInteger(execution.code) &&
+      Number(execution.code) === 0 &&
+      !timedOut,
+    exitCode: Number.isInteger(execution.code) ? Number(execution.code) : null,
+    output,
+    truncated: Boolean(execution.truncated) || output.length >= VERIFY_OUTPUT_MAX_CHARS,
+    startedAt,
+    finishedAt,
+    durationMs: Math.max(0, finishedAt - startedAt),
+  };
+
+  const metadata = readProjectMetadata(projectDir);
+  metadata.updatedAt = finishedAt;
+  writeProjectMetadata(projectDir, metadata);
+  terminal.updatedAt = metadata.updatedAt;
+
+  return result;
+}
+
+async function installProjectApp(
+  appsManager,
+  settingsStore,
+  projectIdInput,
+  requestedTabId,
+  overwriteExisting = false,
+  verifyCommandOverride = "",
+) {
   const { projectId, projectDir } = resolveProjectDir(projectIdInput);
   if (!appsManager?.installAppFromDirectory) {
     throw new Error("Apps manager is unavailable.");
@@ -828,24 +1354,40 @@ async function installProjectApp(appsManager, projectIdInput, requestedTabId, ov
     throw new Error("Project terminal is running. Please stop it before install.");
   }
 
-  const summary = readManifestSummary(projectDir);
-  if (!summary.hasManifest) {
-    throw new Error(`app.json not found in project directory: ${projectDir}`);
-  }
-  if (!summary.appId) {
-    throw new Error("app.json exists but app id is invalid.");
+  const validation = validateProject(projectId, requestedTabId);
+  if (!validation.ok || !validation.normalizedAppId) {
+    const payload = encodeErrorPayload({
+      validation,
+      message: validation.errors[0]?.message || "Project validation failed.",
+    });
+    throw new Error(`${GENERATOR_VALIDATION_ERROR_PREFIX}${payload}`);
   }
 
   const tabId = normalizeTabId(requestedTabId, "workspace");
   const shouldOverwrite = overwriteExisting === true;
+  const appId = validation.normalizedAppId;
   const existing = appsManager.getAppById
-    ? await appsManager.getAppById(summary.appId)
+    ? await appsManager.getAppById(appId)
     : null;
   if (existing && !shouldOverwrite) {
-    throw new Error(`APP_ALREADY_INSTALLED:${summary.appId}`);
+    throw new Error(`APP_ALREADY_INSTALLED:${appId}`);
   }
+
+  const verify = await runProjectVerify(
+    projectId,
+    settingsStore,
+    verifyCommandOverride,
+  );
+  if (!verify.success) {
+    const payload = encodeErrorPayload({
+      verify,
+      message: "Verify command failed. Install blocked.",
+    });
+    throw new Error(`${GENERATOR_VERIFY_ERROR_PREFIX}${payload}`);
+  }
+
   if (existing && appsManager.removeApp) {
-    await appsManager.removeApp(summary.appId);
+    await appsManager.removeApp(appId);
   }
 
   const installedApps = await appsManager.installAppFromDirectory(projectDir, tabId, shouldOverwrite);
@@ -855,9 +1397,11 @@ async function installProjectApp(appsManager, projectIdInput, requestedTabId, ov
   terminal.updatedAt = metadata.updatedAt;
 
   return {
-    generatedAppId: summary.appId,
+    generatedAppId: appId,
     installedApps,
     project: buildProjectDetail(projectId),
+    validation,
+    verify,
   };
 }
 
@@ -870,10 +1414,12 @@ module.exports = {
   installProjectApp,
   listProjects,
   readProjectFile,
+  runProjectVerify,
   resizeProjectTerminal,
   sendProjectTerminalInput,
   saveGeneratorSettings,
   subscribeProjectTerminal,
   startProjectTerminal,
   stopProjectTerminal,
+  validateProject,
 };

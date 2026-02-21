@@ -20,6 +20,12 @@ const {
     generatorProjects,
     generatorStatus,
     generatorTabId,
+    generatorValidationMessage,
+    generatorValidationResult,
+    generatorValidationStatus,
+    generatorVerifyMessage,
+    generatorVerifyResult,
+    generatorVerifyStatus,
     generatorTerminal,
     generatorTerminalMessage,
     generatorTerminalStatus,
@@ -28,6 +34,8 @@ const {
     loadGeneratorSettingsFromStorage,
     loadGeneratorTerminalState,
     openGeneratorProjectFile,
+    runGeneratorProjectValidation,
+    runGeneratorProjectVerifyCheck,
     resizeEmbeddedTerminal,
     saveClaudePathConfig,
     selectGeneratorProject,
@@ -35,6 +43,7 @@ const {
     startEmbeddedTerminal,
     stopEmbeddedTerminal,
     tabs,
+    verifyCommand,
 } = useToolHubState();
 
 interface TreeNode {
@@ -416,6 +425,15 @@ watch(
                         placeholder="Claude CLI path or command (e.g. claude, C:\\Tools\\claude.exe)"
                         class="mt-2 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-500/50 placeholder:text-slate-500 focus:ring"
                     />
+                    <label class="mt-2 block text-[11px] text-slate-500">
+                        Verify Command
+                    </label>
+                    <input
+                        v-model="verifyCommand"
+                        type="text"
+                        placeholder="node --check src/index.js"
+                        class="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-500/50 placeholder:text-slate-500 focus:ring"
+                    />
                     <div class="mt-2 grid grid-cols-2 gap-2">
                         <button
                             type="button"
@@ -431,7 +449,7 @@ watch(
                             :disabled="isGeneratorLoading"
                             @click="saveClaudePathConfig"
                         >
-                            Save Path
+                            Save Settings
                         </button>
                     </div>
                 </div>
@@ -480,6 +498,24 @@ watch(
                             @click="installAppFromGeneratorProject"
                         >
                             Install App
+                        </button>
+                    </div>
+                    <div class="mt-2 grid grid-cols-2 gap-2">
+                        <button
+                            type="button"
+                            class="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            :disabled="!hasSelectedProject || isGeneratorLoading"
+                            @click="runGeneratorProjectValidation"
+                        >
+                            Validate
+                        </button>
+                        <button
+                            type="button"
+                            class="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            :disabled="!hasSelectedProject || isGeneratorLoading"
+                            @click="runGeneratorProjectVerifyCheck"
+                        >
+                            Run Verify
                         </button>
                     </div>
                 </div>
@@ -538,6 +574,94 @@ watch(
                         </code>
                     </p>
                     <p v-else>Select or create a project.</p>
+                </div>
+
+                <div class="grid gap-3 lg:grid-cols-2">
+                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+                        <div class="flex items-center justify-between gap-2">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                Validation
+                            </p>
+                            <span
+                                class="rounded-md px-2 py-1 text-[11px]"
+                                :class="
+                                    generatorValidationStatus === 'success'
+                                        ? 'bg-emerald-500/20 text-emerald-200'
+                                        : generatorValidationStatus === 'error'
+                                          ? 'bg-rose-500/20 text-rose-200'
+                                          : generatorValidationStatus === 'loading'
+                                            ? 'bg-amber-500/20 text-amber-200'
+                                            : 'bg-slate-800 text-slate-300'
+                                "
+                            >
+                                {{ generatorValidationStatus }}
+                            </span>
+                        </div>
+                        <p class="mt-1 text-[11px] text-slate-500">
+                            {{ generatorValidationMessage }}
+                        </p>
+                        <div
+                            v-if="generatorValidationResult"
+                            class="mt-2 space-y-1 text-[11px] text-slate-300"
+                        >
+                            <p>
+                                Errors: {{ generatorValidationResult.errors.length }} · Warnings:
+                                {{ generatorValidationResult.warnings.length }}
+                            </p>
+                            <p v-if="generatorValidationResult.errors.length > 0" class="text-rose-200">
+                                {{ generatorValidationResult.errors[0].message }}
+                            </p>
+                            <p
+                                v-else-if="generatorValidationResult.warnings.length > 0"
+                                class="text-amber-200"
+                            >
+                                {{ generatorValidationResult.warnings[0].message }}
+                            </p>
+                            <p v-else class="text-emerald-200">
+                                No blocking validation issues.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+                        <div class="flex items-center justify-between gap-2">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                Verify
+                            </p>
+                            <span
+                                class="rounded-md px-2 py-1 text-[11px]"
+                                :class="
+                                    generatorVerifyStatus === 'success'
+                                        ? 'bg-emerald-500/20 text-emerald-200'
+                                        : generatorVerifyStatus === 'error'
+                                          ? 'bg-rose-500/20 text-rose-200'
+                                          : generatorVerifyStatus === 'loading'
+                                            ? 'bg-amber-500/20 text-amber-200'
+                                            : 'bg-slate-800 text-slate-300'
+                                "
+                            >
+                                {{ generatorVerifyStatus }}
+                            </span>
+                        </div>
+                        <p class="mt-1 text-[11px] text-slate-500">
+                            {{ generatorVerifyMessage }}
+                        </p>
+                        <div
+                            v-if="generatorVerifyResult"
+                            class="mt-2 space-y-1 text-[11px] text-slate-300"
+                        >
+                            <p>
+                                Cmd: <code>{{ generatorVerifyResult.command }}</code>
+                            </p>
+                            <p>
+                                Exit: <code>{{ generatorVerifyResult.exitCode ?? "-" }}</code> ·
+                                Duration: <code>{{ generatorVerifyResult.durationMs }}ms</code>
+                            </p>
+                            <pre class="max-h-24 overflow-auto whitespace-pre-wrap rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-400">{{
+                                generatorVerifyResult.output || "(no output)"
+                            }}</pre>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="grid gap-3 lg:grid-cols-[minmax(260px,0.78fr)_minmax(0,2.22fr)]">

@@ -14,6 +14,8 @@ import type {
   GeneratorProjectSummary,
   GeneratorSettings,
   GeneratorTerminalState,
+  GeneratorValidationResult,
+  GeneratorVerifyResult,
 } from "../types/generator";
 
 export interface QuickLauncherWindowSizePayload {
@@ -44,7 +46,16 @@ interface ToolHubApi {
     projectId: string,
     tabId: string,
     overwriteExisting?: boolean,
+    verifyCommandOverride?: string,
   ) => Promise<GeneratorInstallResult>;
+  validateGeneratorProject: (
+    projectId: string,
+    tabId?: string,
+  ) => Promise<GeneratorValidationResult>;
+  runGeneratorProjectVerify: (
+    projectId: string,
+    commandOverride?: string,
+  ) => Promise<GeneratorVerifyResult>;
   getGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
   startGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
   sendGeneratorProjectTerminalInput: (
@@ -165,8 +176,28 @@ export function installGeneratorProjectApp(
   projectId: string,
   tabId: string,
   overwriteExisting = false,
+  verifyCommandOverride = "",
 ): Promise<GeneratorInstallResult> {
-  return getApi().installGeneratorProjectApp(projectId, tabId, overwriteExisting);
+  return getApi().installGeneratorProjectApp(
+    projectId,
+    tabId,
+    overwriteExisting,
+    verifyCommandOverride,
+  );
+}
+
+export function validateGeneratorProject(
+  projectId: string,
+  tabId?: string,
+): Promise<GeneratorValidationResult> {
+  return getApi().validateGeneratorProject(projectId, tabId);
+}
+
+export function runGeneratorProjectVerify(
+  projectId: string,
+  commandOverride?: string,
+): Promise<GeneratorVerifyResult> {
+  return getApi().runGeneratorProjectVerify(projectId, commandOverride);
 }
 
 export function getGeneratorProjectTerminal(projectId: string): Promise<GeneratorTerminalState> {

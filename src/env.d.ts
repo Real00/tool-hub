@@ -9,6 +9,8 @@ import type {
   GeneratorProjectSummary,
   GeneratorSettings,
   GeneratorTerminalState,
+  GeneratorValidationResult,
+  GeneratorVerifyResult,
 } from "./types/generator";
 import type {
   ConfigBackupResult,
@@ -40,7 +42,16 @@ declare global {
       projectId: string,
       tabId: string,
       overwriteExisting?: boolean,
+      verifyCommandOverride?: string,
     ) => Promise<GeneratorInstallResult>;
+    validateGeneratorProject: (
+      projectId: string,
+      tabId?: string,
+    ) => Promise<GeneratorValidationResult>;
+    runGeneratorProjectVerify: (
+      projectId: string,
+      commandOverride?: string,
+    ) => Promise<GeneratorVerifyResult>;
     getGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
     startGeneratorProjectTerminal: (projectId: string) => Promise<GeneratorTerminalState>;
     sendGeneratorProjectTerminalInput: (

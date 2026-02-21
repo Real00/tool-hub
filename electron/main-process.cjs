@@ -1747,15 +1747,29 @@ ipcMain.handle(
 
 ipcMain.handle(
   "generator:install-project",
-  async (_event, projectId, tabId, overwriteExisting) => {
+  async (_event, projectId, tabId, overwriteExisting, verifyCommandOverride) => {
     return getAppGenerator().installProjectApp(
       getAppsManager(),
+      getSettingsStore(),
       projectId,
       tabId,
       overwriteExisting,
+      verifyCommandOverride,
     );
   },
 );
+
+ipcMain.handle("generator:validate-project", async (_event, projectId, tabId) => {
+  return getAppGenerator().validateProject(projectId, tabId);
+});
+
+ipcMain.handle("generator:run-verify", async (_event, projectId, commandOverride) => {
+  return getAppGenerator().runProjectVerify(
+    projectId,
+    getSettingsStore(),
+    commandOverride,
+  );
+});
 
 ipcMain.handle("generator:get-terminal", async (_event, projectId) => {
   return getAppGenerator().getProjectTerminal(projectId);
