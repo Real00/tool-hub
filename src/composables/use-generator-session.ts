@@ -840,7 +840,7 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
       if (existingAppId !== null) {
         const displayId = existingAppId || "this app";
         const shouldOverwrite = window.confirm(
-          `App "${displayId}" is already installed. Overwrite existing installation?`,
+          `App "${displayId}" is already installed. Overwrite existing installation? This keeps app KV data.`,
         );
         if (!shouldOverwrite) {
           generatorStatus.value = "idle";

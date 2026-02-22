@@ -1311,6 +1311,15 @@ function normalizeAppIdList(appIdsInput) {
   return output;
 }
 
+function normalizeRemoveOptions(optionsInput) {
+  if (!optionsInput || typeof optionsInput !== "object" || Array.isArray(optionsInput)) {
+    return { purgeStorage: true };
+  }
+  return {
+    purgeStorage: optionsInput.purgeStorage !== false,
+  };
+}
+
 async function stopApps(appIdsInput) {
   const appIds = normalizeAppIdList(appIdsInput);
   for (let i = 0; i < appIds.length; i += 1) {
@@ -1319,10 +1328,11 @@ async function stopApps(appIdsInput) {
   return listApps();
 }
 
-async function removeApps(appIdsInput) {
+async function removeApps(appIdsInput, optionsInput = {}) {
   const appIds = normalizeAppIdList(appIdsInput);
+  const options = normalizeRemoveOptions(optionsInput);
   for (let i = 0; i < appIds.length; i += 1) {
-    await removeApp(appIds[i]);
+    await removeApp(appIds[i], options);
   }
   return listApps();
 }
@@ -1334,11 +1344,12 @@ async function initializeAppsDatabase() {
   return listApps();
 }
 
-async function removeApp(appIdInput) {
+async function removeApp(appIdInput, optionsInput = {}) {
   const appId = normalizeAppId(appIdInput, "");
   if (!appId) {
     throw new Error("Invalid app id.");
   }
+  const { purgeStorage } = normalizeRemoveOptions(optionsInput);
 
   const record = await getAppRecord(appId);
   if (!record) {
@@ -1367,7 +1378,9 @@ async function removeApp(appIdInput) {
     const db = await getDb();
     await db.exec("BEGIN IMMEDIATE");
     try {
-      await db.run("DELETE FROM app_kv WHERE app_id = ?", appId);
+      if (purgeStorage) {
+        await db.run("DELETE FROM app_kv WHERE app_id = ?", appId);
+      }
       await db.run("DELETE FROM app_runs WHERE app_id = ?", appId);
       await db.run("DELETE FROM apps WHERE id = ?", appId);
       await db.exec("COMMIT");

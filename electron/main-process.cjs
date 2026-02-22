@@ -2749,16 +2749,16 @@ ipcMain.handle("apps:update-tab", async (_event, appId, tabId) => {
   return getAppsManager().updateAppTab(appId, tabId);
 });
 
-ipcMain.handle("apps:remove", async (_event, appId) => {
+ipcMain.handle("apps:remove", async (_event, appId, options) => {
   closeAppWindowById(appId);
-  return getAppsManager().removeApp(appId);
+  return getAppsManager().removeApp(appId, options);
 });
 
-ipcMain.handle("apps:batch-remove", async (_event, appIds) => {
+ipcMain.handle("apps:batch-remove", async (_event, appIds, options) => {
   if (Array.isArray(appIds)) {
     appIds.forEach((appId) => closeAppWindowById(appId));
   }
-  return getAppsManager().removeApps(appIds);
+  return getAppsManager().removeApps(appIds, options);
 });
 
 ipcMain.handle("apps:open-window", async (_event, appId, launchContext) => {

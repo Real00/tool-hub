@@ -9,6 +9,7 @@ import type {
   AppsRootInfo,
   ContextDispatchRequest,
   InstalledApp,
+  RemoveAppOptions,
 } from "./types/app";
 import type {
   ClaudeCliDetectionResult,
@@ -96,12 +97,15 @@ declare global {
     getAppLogs: (appId: string) => Promise<string[]>;
     getAppRuns: (appId: string, limit?: number) => Promise<AppRunRecord[]>;
     updateAppTab: (appId: string, tabId: string) => Promise<InstalledApp[]>;
-    batchRemoveApps: (appIds: string[]) => Promise<InstalledApp[]>;
+    batchRemoveApps: (
+      appIds: string[],
+      options?: RemoveAppOptions,
+    ) => Promise<InstalledApp[]>;
     subscribeAppLogs: (
       appId: string,
       callback: (event: AppLogEvent) => void,
     ) => () => void;
-    removeApp: (appId: string) => Promise<InstalledApp[]>;
+    removeApp: (appId: string, options?: RemoveAppOptions) => Promise<InstalledApp[]>;
     openAppWindow: (appId: string, launchContext?: AppLaunchContextInput) => Promise<boolean>;
     dispatchAppCapability: (
       payload: AppCapabilityDispatchPayload,

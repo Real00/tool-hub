@@ -1567,10 +1567,6 @@ async function installProjectApp(
     throw new Error(`${GENERATOR_VERIFY_ERROR_PREFIX}${payload}`);
   }
 
-  if (existing && appsManager.removeApp) {
-    await appsManager.removeApp(appId);
-  }
-
   const installedApps = await appsManager.installAppFromDirectory(projectDir, tabId, shouldOverwrite);
   const metadata = readProjectMetadata(projectDir);
   metadata.updatedAt = now();

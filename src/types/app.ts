@@ -102,3 +102,7 @@ export interface AppLogEvent {
   stream: string;
   text: string;
 }
+
+export interface RemoveAppOptions {
+  purgeStorage?: boolean;
+}

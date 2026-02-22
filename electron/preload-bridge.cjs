@@ -119,8 +119,8 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   batchStopApps(appIds) {
     return ipcRenderer.invoke("apps:batch-stop", appIds);
   },
-  batchRemoveApps(appIds) {
-    return ipcRenderer.invoke("apps:batch-remove", appIds);
+  batchRemoveApps(appIds, options) {
+    return ipcRenderer.invoke("apps:batch-remove", appIds, options);
   },
   subscribeAppLogs(appId, callback) {
     if (typeof callback !== "function") {
@@ -138,8 +138,8 @@ contextBridge.exposeInMainWorld("toolHubApi", {
       ipcRenderer.removeListener("apps:log-event", listener);
     };
   },
-  removeApp(appId) {
-    return ipcRenderer.invoke("apps:remove", appId);
+  removeApp(appId, options) {
+    return ipcRenderer.invoke("apps:remove", appId, options);
   },
   openAppWindow(appId, launchContext) {
     return ipcRenderer.invoke("apps:open-window", appId, launchContext);

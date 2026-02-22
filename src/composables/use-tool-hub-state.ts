@@ -1,7 +1,12 @@
 import { computed, ref } from "vue";
 import { useGeneratorSession } from "./use-generator-session";
 import { defaultTabs } from "../config/settings";
-import type { AppRunRecord, AppsRootInfo, InstalledApp } from "../types/app";
+import type {
+  AppRunRecord,
+  AppsRootInfo,
+  InstalledApp,
+  RemoveAppOptions,
+} from "../types/app";
 import type { TabDefinition } from "../types/settings";
 import type { UpdateState } from "../types/update";
 import {
@@ -690,7 +695,7 @@ function createToolHubState() {
       if (existingAppId !== null) {
         const displayId = existingAppId || "this app";
         const shouldOverwrite = window.confirm(
-          `App "${displayId}" is already installed. Overwrite existing installation?`,
+          `App "${displayId}" is already installed. Overwrite existing installation? This keeps app KV data.`,
         );
         if (!shouldOverwrite) {
           appsStatus.value = "idle";
@@ -782,12 +787,18 @@ function createToolHubState() {
     ) {
       return;
     }
+    const purgeStorage = window.confirm(
+      `Also delete app "${appId}" KV data? Click OK to delete data, or Cancel to keep data for reinstall.`,
+    );
+    const removeOptions: RemoveAppOptions = {
+      purgeStorage,
+    };
 
     appsStatus.value = "loading";
     appsMessage.value = `Removing app: ${appId}...`;
 
     try {
-      const list = await removeApp(appId);
+      const list = await removeApp(appId, removeOptions);
       applyApps(list);
       if (logsAppId.value === appId) {
         detachAppLogStreaming();
@@ -798,7 +809,9 @@ function createToolHubState() {
         runsStatus.value = "idle";
       }
       appsStatus.value = "success";
-      appsMessage.value = `App removed: ${appId}`;
+      appsMessage.value = purgeStorage
+        ? `App removed: ${appId} (KV data deleted).`
+        : `App removed: ${appId} (KV data preserved).`;
     } catch (error) {
       appsStatus.value = "error";
       appsMessage.value = `Remove failed: ${formatError(error)}`;
@@ -914,11 +927,17 @@ function createToolHubState() {
     ) {
       return;
     }
+    const purgeStorage = window.confirm(
+      `Also delete KV data for all ${targets.length} app(s)? Click OK to delete data, or Cancel to keep data for reinstall.`,
+    );
+    const removeOptions: RemoveAppOptions = {
+      purgeStorage,
+    };
 
     appsStatus.value = "loading";
     appsMessage.value = `Removing ${targets.length} app(s)...`;
     try {
-      const list = await batchRemoveAppsBridge(targets);
+      const list = await batchRemoveAppsBridge(targets, removeOptions);
       applyApps(list);
       if (logsAppId.value && targets.includes(logsAppId.value)) {
         detachAppLogStreaming();
@@ -929,7 +948,9 @@ function createToolHubState() {
         runsStatus.value = "idle";
       }
       appsStatus.value = "success";
-      appsMessage.value = `Removed ${targets.length} app(s).`;
+      appsMessage.value = purgeStorage
+        ? `Removed ${targets.length} app(s) with KV data deleted.`
+        : `Removed ${targets.length} app(s) with KV data preserved.`;
     } catch (error) {
       appsStatus.value = "error";
       appsMessage.value = `Batch remove failed: ${formatError(error)}`;
