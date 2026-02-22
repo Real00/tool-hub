@@ -1,10 +1,10 @@
 # Tool Hub
 
-桌面工具集应用，使用 Vue 3 + Tailwind CSS 构建。
+A desktop toolbox application built with Vue 3 + Tailwind CSS.
 
 ## Changelog
 
-- 本次发布变更见 `CHANGELOG.md`（当前版本：`0.2.1`）。
+- See `CHANGELOG.md` for release notes (current version: `0.2.2`).
 
 ## Start
 
@@ -13,16 +13,16 @@ pnpm install
 pnpm dev
 ```
 
-## 运行应用
+## Run the app
 
-开发模式：
+Development mode:
 
 ```bash
 pnpm install
 pnpm electron:dev
 ```
 
-- `pnpm electron:dev`: 开发模式，支持热重载。
+- `pnpm electron:dev`: development mode with hot reload.
 
 ## Build
 
@@ -30,7 +30,7 @@ pnpm electron:dev
 pnpm build
 ```
 
-## Windows 打包与发布
+## Windows packaging and release
 
 ```bash
 pnpm electron:pack:win
@@ -38,11 +38,11 @@ pnpm electron:dist:win:dry
 pnpm electron:dist:win
 ```
 
-- `pnpm electron:pack:win`: 本地生成 Windows NSIS 安装包（x64，不发布）。
-- `pnpm electron:dist:win:dry`: 本地验证发布产物（含更新元数据，不发布）。
-- `pnpm electron:dist:win`: 发布到 GitHub Releases（需要 `GH_TOKEN`）。
+- `pnpm electron:pack:win`: build a local Windows NSIS installer (x64, no publish).
+- `pnpm electron:dist:win:dry`: validate release artifacts locally (includes update metadata, no publish).
+- `pnpm electron:dist:win`: publish to GitHub Releases (requires `GH_TOKEN`).
 
-发布前请设置环境变量（PowerShell）：
+Set environment variables before publishing (PowerShell):
 
 ```powershell
 $env:GH_TOKEN = "<github-token>"
@@ -50,17 +50,17 @@ $env:GH_OWNER = "<github-owner>"
 $env:GH_REPO = "<github-repo>"
 ```
 
-配置文件在 `electron-builder.yml`，默认开启 NSIS 差分更新（blockmap）。
-发布专用配置在 `electron-builder.publish.yml`（读取 `GH_OWNER`、`GH_REPO`）。
+Base config is in `electron-builder.yml`, with NSIS differential update (blockmap) enabled by default.
+Publish config is in `electron-builder.publish.yml` (reads `GH_OWNER` and `GH_REPO`).
 
-## 运行构建后的应用
+## Run the built app
 
 ```bash
 pnpm electron:start
 ```
 
-- `pnpm electron:start`: 直接启动应用（快速启动）。
-- `pnpm electron:start:build`: 先构建再启动。
+- `pnpm electron:start`: launch directly (fast start).
+- `pnpm electron:start:build`: build first, then launch.
 
 ## Define tabs in settings
 
@@ -84,8 +84,8 @@ defaultTabs: [
 - Open **Settings** in the top bar.
 - Edit tab labels/ids and click **Save**.
 - Use **Init DB** in settings tabs section to initialize/check settings DB schema.
-- 在开发环境中，数据存储在 `data/settings.sqlite`。
-- 在打包后的应用中，数据存储在用户数据目录。
+- In development, data is stored at `data/settings.sqlite`.
+- In packaged builds, data is stored under the user data directory.
 
 ## Node app runtime (fixed user directory)
 
@@ -97,7 +97,7 @@ defaultTabs: [
 - Windows Explorer context menu can forward selected files/folders to Tool Hub for capability dispatch.
 - Each app runs in an isolated Node process with its own cwd/env.
 - Apps are grouped under top tabs by `apps.tab_id` in SQLite.
-- 应用 UI 在独立窗口中打开（不嵌入主页面）。
+- App UI opens in a separate window (not embedded in the main page).
 - A runnable template is available at `templates/node-hello-app`.
 
 ### App UI host API
@@ -179,14 +179,14 @@ src/
 
 - Vue components use `PascalCase.vue` (example: `AppTopMenu.vue`)
 - Non-component source files use `kebab-case` (example: `settings.ts`)
-- 进程文件使用明确的角色命名（`main-process.cjs`、`preload-bridge.cjs`）
+- Process files use explicit role naming (`main-process.cjs`, `preload-bridge.cjs`).
 
-## 技术架构
+## Technical Architecture
 
-- 前端桥接：`src/platform/electron-bridge.ts`
-- SQLite 存储：`electron/settings-store.cjs`、`electron/apps-manager.cjs`
-- IPC 处理器：`electron/main-process.cjs`、`electron/preload-bridge.cjs`
-- API methods（renderer -> preload）:
+- Frontend bridge: `src/platform/electron-bridge.ts`
+- SQLite storage: `electron/settings-store.cjs`, `electron/apps-manager.cjs`
+- IPC handlers: `electron/main-process.cjs`, `electron/preload-bridge.cjs`
+- API methods (renderer -> preload):
   - `ping`
   - settings: `getSettingsTabs` `saveSettingsTabs` `initializeSettingsDatabase` `backupConfiguration` `restoreConfigurationFromArchive`
   - generator: `getGeneratorSettings` `saveGeneratorSettings` `detectClaudeCli` `createGeneratorProject` `getGeneratorProject` `listGeneratorProjects` `readGeneratorProjectFile`
@@ -196,7 +196,7 @@ src/
   - system apps: `refreshSystemAppsIndex` `searchSystemApps` `openSystemApp`
   - updates: `getUpdateState` `checkForUpdates` `downloadUpdate` `installUpdateAndRestart` `subscribeUpdateEvents`
   - quick launcher: `closeQuickLauncherWindow` `setQuickLauncherWindowSize` `subscribeQuickLauncherRequest`
-- IPC channels（main handlers/events）:
+- IPC channels (main handlers/events):
   - `tool-hub:ping`
   - settings: `settings:get-tabs` `settings:save-tabs` `settings:initialize-db` `settings:backup-config` `settings:restore-config`
   - generator: `generator:get-settings` `generator:save-settings` `generator:detect-claude-cli` `generator:create-project` `generator:get-project` `generator:list-projects` `generator:read-project-file` `generator:install-project`

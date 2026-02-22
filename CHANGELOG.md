@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.2] - 2026-02-22
+
+### Added
+- 新增应用 Runtime 目录选择 API：`window.toolHubAppApi.pickDirectory(...)`，支持可选目录条目扫描（`includeEntries`、`maxEntries`、`maxDepth`、`includeHidden`）。
+
+### Fixed
+- 修复应用覆盖安装时丢失应用级 key/value 存储数据的问题，覆盖安装默认保留原有数据。
+- 修复 Generator 终端输出闪烁问题，改为增量输出同步策略。
+- 增强 Generator 安装前校验与覆盖安装处理流程，降低安装失败和误覆盖风险。
+
+### Changed
+- 将 `electron/main-process.cjs` 拆分为 `electron/main-process/` 下多个职责模块（`auto-update`、`window-manager`、`app-runtime-windows`、`context-dispatch`、`config-restore`），提升主进程可维护性。
+- 将 `electron/app-generator.cjs` 拆分为 `electron/app-generator/` 下的多模块结构，明确职责边界并便于后续扩展。
+- README 统一调整为英文，消除中英文混写。
+- 发布流程技能文档更新为更严格的命令时序约束，降低发版过程中的操作风险。
+
 ## [0.2.1] - 2026-02-21
 
 ### Fixed
