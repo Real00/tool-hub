@@ -16,6 +16,7 @@ import {
   getGeneratorSettings,
   installGeneratorProjectApp,
   isElectronRuntime,
+  listApps,
   listGeneratorProjects,
   readGeneratorProjectFile,
   resizeGeneratorProjectTerminal,
@@ -817,9 +818,34 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
 
     generatorStatus.value = "loading";
     generatorMessage.value = "Installing app from selected project...";
+    let preflightOverwrite = false;
+
+    const preflightAppId = String(generatorProject.value?.appId ?? "").trim().toLowerCase();
+    if (preflightAppId) {
+      try {
+        const installedApps = await listApps();
+        const alreadyInstalled = installedApps.some(
+          (item) => String(item.id ?? "").trim().toLowerCase() === preflightAppId,
+        );
+        if (alreadyInstalled) {
+          const shouldOverwrite = window.confirm(
+            `App "${preflightAppId}" is already installed. Overwrite existing installation? This keeps app KV data.`,
+          );
+          if (!shouldOverwrite) {
+            generatorStatus.value = "idle";
+            generatorMessage.value = "Install canceled.";
+            return;
+          }
+          preflightOverwrite = true;
+          generatorMessage.value = `Overwriting app "${preflightAppId}"...`;
+        }
+      } catch {
+        // Ignore preflight lookup failures and keep runtime install fallback.
+      }
+    }
 
     try {
-      const result = await executeInstall(false);
+      const result = await executeInstall(preflightOverwrite);
       generatorProject.value = result.project;
       upsertProjectSummary(toSummary(result.project));
       applyValidationResult(result.validation);
@@ -831,7 +857,9 @@ export function useGeneratorSession(options: UseGeneratorSessionOptions) {
         tabId: generatorTabId.value,
       });
       generatorStatus.value = "success";
-      generatorMessage.value = "Project app installed successfully.";
+      generatorMessage.value = preflightOverwrite
+        ? "Project app overwritten successfully."
+        : "Project app installed successfully.";
     } catch (error) {
       if (handleStructuredGeneratorError(error)) {
         return;
