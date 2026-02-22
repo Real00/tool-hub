@@ -208,6 +208,7 @@ let fitAddon: FitAddon | null = null;
 let renderedOutput = "";
 let renderedSeq = 0;
 let removeResizeListener: (() => void) | null = null;
+const TERMINAL_OUTPUT_OVERLAP_MAX_CHARS = 8192;
 
 function formatTime(value: number): string {
     if (!value) {
@@ -312,22 +313,26 @@ function handleFileOpen(filePath: string) {
     void openGeneratorProjectFile(filePath);
 }
 
-function writeTerminalWithScrollRetention(chunk: string) {
+function writeTerminalChunk(chunk: string) {
     if (!xterm || !chunk) {
         return;
     }
-    const previousViewportY = xterm.buffer.active.viewportY;
-    const previousBaseY = xterm.buffer.active.baseY;
-    const pinnedToBottom = previousViewportY >= previousBaseY;
+    xterm.write(chunk);
+}
 
-    xterm.write(chunk, () => {
-        if (!xterm) {
-            return;
+function findTailHeadOverlap(previousOutput: string, nextOutput: string): number {
+    if (!previousOutput || !nextOutput) {
+        return 0;
+    }
+    const previousTail = previousOutput.slice(-TERMINAL_OUTPUT_OVERLAP_MAX_CHARS);
+    const maxLength = Math.min(previousTail.length, nextOutput.length);
+    for (let length = maxLength; length > 0; length -= 1) {
+        const suffix = previousTail.slice(previousTail.length - length);
+        if (nextOutput.startsWith(suffix)) {
+            return length;
         }
-        if (!pinnedToBottom) {
-            xterm.scrollToLine(previousViewportY);
-        }
-    });
+    }
+    return 0;
 }
 
 function syncTerminalOutput(state: {
@@ -343,31 +348,52 @@ function syncTerminalOutput(state: {
     const nextSeq = Number(state.outputSeq || 0);
     const nextChunk = state.lastChunk || "";
     if (!nextOutput) {
-        xterm.reset();
+        if (renderedOutput || renderedSeq > 0) {
+            xterm.reset();
+        }
         renderedOutput = "";
         renderedSeq = 0;
         return;
     }
 
-    if (
-        nextSeq > renderedSeq &&
-        nextChunk &&
-        nextOutput.startsWith(renderedOutput) &&
-        nextOutput.endsWith(nextChunk)
-    ) {
-        writeTerminalWithScrollRetention(nextChunk);
+    if (!renderedOutput && renderedSeq === 0) {
+        writeTerminalChunk(nextOutput);
         renderedOutput = nextOutput;
         renderedSeq = nextSeq;
         return;
     }
 
-    if (nextOutput === renderedOutput) {
+    if (nextSeq < renderedSeq) {
+        xterm.reset();
+        writeTerminalChunk(nextOutput);
+        renderedOutput = nextOutput;
         renderedSeq = nextSeq;
         return;
     }
 
-    xterm.reset();
-    writeTerminalWithScrollRetention(nextOutput);
+    if (nextSeq === renderedSeq) {
+        renderedOutput = nextOutput;
+        return;
+    }
+
+    let appendChunk = "";
+    if (nextOutput.startsWith(renderedOutput)) {
+        appendChunk = nextOutput.slice(renderedOutput.length);
+    } else {
+        const overlapLength = findTailHeadOverlap(renderedOutput, nextOutput);
+        if (overlapLength > 0) {
+            appendChunk = nextOutput.slice(overlapLength);
+        } else if (nextChunk) {
+            appendChunk = nextChunk;
+        } else {
+            appendChunk = nextOutput;
+        }
+    }
+
+    if (appendChunk) {
+        writeTerminalChunk(appendChunk);
+    }
+
     renderedOutput = nextOutput;
     renderedSeq = nextSeq;
 }
