@@ -156,6 +156,9 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   searchSystemApps(query, limit) {
     return ipcRenderer.invoke("system-apps:search", query, limit);
   },
+  getSystemAppsByIds(appIds) {
+    return ipcRenderer.invoke("system-apps:get-by-ids", appIds);
+  },
   openSystemApp(appId, launchPayload) {
     return ipcRenderer.invoke("system-apps:open", appId, launchPayload);
   },

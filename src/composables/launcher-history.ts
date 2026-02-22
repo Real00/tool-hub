@@ -12,6 +12,7 @@ export interface LauncherHistoryItem {
   source: string;
   acceptsLaunchPayload: boolean;
   favorite: boolean;
+  iconDataUrl?: string;
   launchCount: number;
   lastLaunchedAt: number;
 }
@@ -22,6 +23,7 @@ interface RecordLaunchInput {
   name: string;
   source: string;
   acceptsLaunchPayload: boolean;
+  iconDataUrl?: string;
 }
 
 function canUseStorage(): boolean {
@@ -67,6 +69,7 @@ function normalizeHistoryItem(input: unknown): LauncherHistoryItem | null {
   const key = makeLauncherHistoryKey(kind, targetId);
   const launchCount = Number(candidate.launchCount ?? 0);
   const lastLaunchedAt = Number(candidate.lastLaunchedAt ?? 0);
+  const iconDataUrl = String(candidate.iconDataUrl ?? "").trim();
   return {
     key,
     kind,
@@ -75,6 +78,7 @@ function normalizeHistoryItem(input: unknown): LauncherHistoryItem | null {
     source,
     acceptsLaunchPayload: candidate.acceptsLaunchPayload === true,
     favorite: candidate.favorite === true,
+    iconDataUrl: iconDataUrl || undefined,
     launchCount: Number.isFinite(launchCount) ? Math.max(0, Math.floor(launchCount)) : 0,
     lastLaunchedAt: Number.isFinite(lastLaunchedAt) ? Math.max(0, Math.floor(lastLaunchedAt)) : 0,
   };
@@ -145,6 +149,7 @@ export function recordLauncherLaunch(input: RecordLaunchInput) {
   const current = readLauncherHistory();
   const existing = current.find((item) => item.key === key);
   const now = Date.now();
+  const nextIconDataUrl = String(input.iconDataUrl ?? "").trim();
   const nextItem: LauncherHistoryItem = {
     key,
     kind,
@@ -153,6 +158,7 @@ export function recordLauncherLaunch(input: RecordLaunchInput) {
     source: String(input.source ?? "").trim() || (kind === "system" ? "System" : "Installed"),
     acceptsLaunchPayload: input.acceptsLaunchPayload === true,
     favorite: existing?.favorite === true,
+    iconDataUrl: nextIconDataUrl || existing?.iconDataUrl,
     launchCount: (existing?.launchCount ?? 0) + 1,
     lastLaunchedAt: now,
   };
@@ -181,6 +187,36 @@ export function toggleLauncherFavorite(keyInput: string): boolean {
   });
   persistHistory(next);
   return nextFavorite;
+}
+
+export function upsertLauncherHistoryIcons(iconByKey: ReadonlyMap<string, string>): boolean {
+  if (!(iconByKey instanceof Map) || iconByKey.size === 0) {
+    return false;
+  }
+
+  const current = readLauncherHistory();
+  if (current.length === 0) {
+    return false;
+  }
+
+  let changed = false;
+  const next = current.map((item) => {
+    const nextIcon = String(iconByKey.get(item.key) ?? "").trim();
+    if (!nextIcon || item.iconDataUrl === nextIcon) {
+      return item;
+    }
+    changed = true;
+    return {
+      ...item,
+      iconDataUrl: nextIcon,
+    };
+  });
+
+  if (!changed) {
+    return false;
+  }
+  persistHistory(next);
+  return true;
 }
 
 export function subscribeLauncherHistoryUpdates(callback: () => void): () => void {

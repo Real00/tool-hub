@@ -455,21 +455,36 @@ function createWindowManager(options = {}) {
     win.setBounds(bounds, true);
   }
 
-  function closeQuickLauncherWindow() {
-    if (!quickLauncherWindow || quickLauncherWindow.isDestroyed()) {
-      quickLauncherWindow = null;
-      quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
-      quickLauncherSizeState = normalizeQuickLauncherSizeState(
-        QUICK_LAUNCHER_SIZE_COMPACT,
-      );
-      return;
-    }
-    // Reset mode/state even if no window exists so the next open starts compact.
+  function resetQuickLauncherSizeState() {
     quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
     quickLauncherSizeState = normalizeQuickLauncherSizeState(
       QUICK_LAUNCHER_SIZE_COMPACT,
     );
-    quickLauncherWindow.close();
+  }
+
+  function hideQuickLauncherWindow() {
+    resetQuickLauncherSizeState();
+    if (!quickLauncherWindow || quickLauncherWindow.isDestroyed()) {
+      quickLauncherWindow = null;
+      return;
+    }
+    quickLauncherWindow.hide();
+  }
+
+  function destroyQuickLauncherWindow() {
+    resetQuickLauncherSizeState();
+    if (!quickLauncherWindow || quickLauncherWindow.isDestroyed()) {
+      quickLauncherWindow = null;
+      return;
+    }
+    const win = quickLauncherWindow;
+    quickLauncherWindow = null;
+    win.close();
+  }
+
+  function closeQuickLauncherWindow() {
+    // Keep API compatibility for renderer close request while reusing the window.
+    hideQuickLauncherWindow();
   }
 
   function createQuickLauncherWindow() {
@@ -507,7 +522,7 @@ function createWindowManager(options = {}) {
       if (isQuitting) {
         return;
       }
-      closeQuickLauncherWindow();
+      hideQuickLauncherWindow();
     });
     win.on("closed", () => {
       if (quickLauncherWindow === win) {
@@ -517,17 +532,29 @@ function createWindowManager(options = {}) {
 
     void win.loadURL(resolveRendererEntryUrl("/quick-launcher")).catch((error) => {
       console.error("Failed to load quick launcher window:", error);
-      closeQuickLauncherWindow();
+      destroyQuickLauncherWindow();
     });
 
     return win;
   }
 
+  function emitQuickLauncherOpenSignal(win) {
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+    win.webContents.send("quick-launcher:open");
+  }
+
+  function prewarmQuickLauncherWindow() {
+    const win = createQuickLauncherWindow();
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+    win.hide();
+  }
+
   function showQuickLauncherWindow() {
-    quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
-    quickLauncherSizeState = normalizeQuickLauncherSizeState(
-      QUICK_LAUNCHER_SIZE_COMPACT,
-    );
+    resetQuickLauncherSizeState();
     const win = createQuickLauncherWindow();
     if (!win || win.isDestroyed()) {
       return;
@@ -540,6 +567,7 @@ function createWindowManager(options = {}) {
         if (!win.isDestroyed()) {
           win.show();
           win.focus();
+          emitQuickLauncherOpenSignal(win);
         }
       });
       return;
@@ -547,6 +575,7 @@ function createWindowManager(options = {}) {
 
     win.show();
     win.focus();
+    emitQuickLauncherOpenSignal(win);
   }
 
   function emitQuickLauncherOpen() {
@@ -555,7 +584,7 @@ function createWindowManager(options = {}) {
       !quickLauncherWindow.isDestroyed() &&
       quickLauncherWindow.isVisible()
     ) {
-      closeQuickLauncherWindow();
+      hideQuickLauncherWindow();
       return;
     }
     showQuickLauncherWindow();
@@ -597,7 +626,9 @@ function createWindowManager(options = {}) {
     createTray,
     updateTrayMenu,
     registerQuickLauncherHotkey,
+    prewarmQuickLauncherWindow,
     closeQuickLauncherWindow,
+    destroyQuickLauncherWindow,
     setQuickLauncherWindowSize,
     stripWindowMenu,
     attachWindowKeyboardShortcuts,

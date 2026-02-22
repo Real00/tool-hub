@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
+  getSystemAppsByIds,
   isElectronRuntime,
   openAppWindow,
   openSystemApp,
@@ -15,6 +16,7 @@ import {
   recordLauncherLaunch,
   subscribeLauncherHistoryUpdates,
   toggleLauncherFavorite,
+  upsertLauncherHistoryIcons,
 } from "../composables/launcher-history";
 import type { InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
@@ -52,8 +54,10 @@ const emit = defineEmits<{
 }>();
 
 const SEARCH_LIMIT = 12;
-const SYSTEM_SEARCH_LIMIT = 20;
+const SYSTEM_SEARCH_LIMIT = 10;
 const INSTALLED_SEARCH_LIMIT = 20;
+const ICON_BACKFILL_LIMIT = 50;
+const ICON_BACKFILL_RETRY_MS = 5 * 60 * 1000;
 
 const canSearchApps = isElectronRuntime();
 const modalRootRef = ref<HTMLElement | null>(null);
@@ -70,6 +74,9 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let searchToken = 0;
 let searchQueryBeforePayload = "";
 let unsubscribeLauncherHistory: (() => void) | null = null;
+const recentIconBackfillInFlight = new Set<string>();
+const recentIconBackfillAttemptAt = new Map<string, number>();
+let disposed = false;
 
 const placeholder = computed(() => {
   if (launchPayloadTarget.value) {
@@ -189,6 +196,7 @@ function buildRecentResults(): LauncherResultItem[] {
       targetId: item.targetId,
       name: item.name,
       source: `Recent / ${item.source}`,
+      iconDataUrl: item.iconDataUrl,
       score: 500 + computeLauncherHistoryBoost(item),
       acceptsLaunchPayload: item.acceptsLaunchPayload,
       historyKey,
@@ -199,11 +207,157 @@ function buildRecentResults(): LauncherResultItem[] {
   return output.slice(0, SEARCH_LIMIT);
 }
 
+async function runRecentSystemIconBackfill(systemIds: string[]) {
+  if (systemIds.length === 0 || disposed) {
+    return;
+  }
+
+  try {
+    const entries = await getSystemAppsByIds(systemIds);
+    if (disposed || entries.length === 0) {
+      return;
+    }
+    const iconByHistoryKey = new Map<string, string>();
+    for (let i = 0; i < entries.length; i += 1) {
+      const entry = entries[i];
+      const iconDataUrl = String(entry.iconDataUrl ?? "").trim();
+      if (!iconDataUrl) {
+        continue;
+      }
+      iconByHistoryKey.set(makeLauncherHistoryKey("system", entry.id), iconDataUrl);
+    }
+    if (iconByHistoryKey.size > 0) {
+      upsertLauncherHistoryIcons(iconByHistoryKey);
+    }
+  } catch {
+    // Ignore icon backfill failures and keep launcher responsive.
+  } finally {
+    systemIds.forEach((id) => {
+      recentIconBackfillInFlight.delete(id);
+    });
+  }
+}
+
+function backfillRecentSystemIcons(items: LauncherResultItem[]) {
+  if (!canSearchApps || disposed) {
+    return;
+  }
+
+  const now = Date.now();
+  const targetIds: string[] = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (item.kind !== "system" || item.iconDataUrl) {
+      continue;
+    }
+    const targetId = item.targetId.trim();
+    if (!targetId || recentIconBackfillInFlight.has(targetId)) {
+      continue;
+    }
+    const lastAttemptAt = recentIconBackfillAttemptAt.get(targetId) ?? 0;
+    if (now - lastAttemptAt < ICON_BACKFILL_RETRY_MS) {
+      continue;
+    }
+    recentIconBackfillInFlight.add(targetId);
+    recentIconBackfillAttemptAt.set(targetId, now);
+    targetIds.push(targetId);
+    if (targetIds.length >= ICON_BACKFILL_LIMIT) {
+      break;
+    }
+  }
+
+  if (targetIds.length > 0) {
+    void runRecentSystemIconBackfill(targetIds);
+  }
+}
+
+function collectPendingSystemIconIds(items: LauncherResultItem[], limit: number): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (item.kind !== "system" || item.iconDataUrl) {
+      continue;
+    }
+    const targetId = item.targetId.trim();
+    if (!targetId || seen.has(targetId)) {
+      continue;
+    }
+    seen.add(targetId);
+    output.push(targetId);
+    if (output.length >= limit) {
+      break;
+    }
+  }
+  return output;
+}
+
+async function runSearchSystemIconBackfill(systemIds: string[], token: number) {
+  if (systemIds.length === 0 || disposed) {
+    return;
+  }
+
+  try {
+    const entries = await getSystemAppsByIds(systemIds);
+    if (
+      disposed ||
+      token !== searchToken ||
+      !props.open ||
+      launchPayloadTarget.value ||
+      entries.length === 0
+    ) {
+      return;
+    }
+
+    const iconByTargetId = new Map<string, string>();
+    const iconByHistoryKey = new Map<string, string>();
+    for (let i = 0; i < entries.length; i += 1) {
+      const entry = entries[i];
+      const iconDataUrl = String(entry.iconDataUrl ?? "").trim();
+      if (!iconDataUrl) {
+        continue;
+      }
+      iconByTargetId.set(entry.id, iconDataUrl);
+      iconByHistoryKey.set(makeLauncherHistoryKey("system", entry.id), iconDataUrl);
+    }
+    if (iconByTargetId.size === 0) {
+      return;
+    }
+
+    results.value = results.value.map((item) => {
+      if (item.kind !== "system") {
+        return item;
+      }
+      const iconDataUrl = iconByTargetId.get(item.targetId);
+      if (!iconDataUrl || item.iconDataUrl === iconDataUrl) {
+        return item;
+      }
+      return {
+        ...item,
+        iconDataUrl,
+      };
+    });
+    if (iconByHistoryKey.size > 0) {
+      upsertLauncherHistoryIcons(iconByHistoryKey);
+    }
+  } catch {
+    // Ignore icon backfill failures and keep launcher responsive.
+  }
+}
+
+function backfillSearchSystemIcons(items: LauncherResultItem[], token: number) {
+  const targetIds = collectPendingSystemIconIds(items, SYSTEM_SEARCH_LIMIT);
+  if (targetIds.length > 0) {
+    void runSearchSystemIconBackfill(targetIds, token);
+  }
+}
+
 function showRecentResults() {
   const recent = buildRecentResults();
   results.value = recent;
   activeIndex.value = recent.length > 0 ? 0 : -1;
   status.value = "idle";
+  backfillRecentSystemIcons(recent);
 }
 
 function clearSearch() {
@@ -360,6 +514,7 @@ async function runSearch() {
     results.value = mergedResults;
     activeIndex.value = mergedResults.length > 0 ? 0 : -1;
     status.value = "idle";
+    backfillSearchSystemIcons(mergedResults, token);
   } catch (error) {
     if (token !== searchToken) {
       return;
@@ -429,6 +584,7 @@ async function executeLaunchTarget(target: LauncherResultItem, launchPayload?: s
       name: target.name,
       source: target.source,
       acceptsLaunchPayload: target.acceptsLaunchPayload,
+      iconDataUrl: target.iconDataUrl,
     });
     refreshLauncherHistory();
     clearSearch();
@@ -598,6 +754,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  disposed = true;
   unsubscribeLauncherHistory?.();
   unsubscribeLauncherHistory = null;
   if (searchTimer) {
@@ -607,6 +764,7 @@ onBeforeUnmount(() => {
 });
 
 onMounted(async () => {
+  disposed = false;
   refreshLauncherHistory();
   unsubscribeLauncherHistory = subscribeLauncherHistoryUpdates(() => {
     refreshLauncherHistory();

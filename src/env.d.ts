@@ -113,6 +113,7 @@ declare global {
     pickInstallDirectory: () => Promise<string | null>;
     refreshSystemAppsIndex: () => Promise<number>;
     searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
+    getSystemAppsByIds: (appIds: string[]) => Promise<SystemAppEntry[]>;
     openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
     closeQuickLauncherWindow: () => Promise<boolean>;
     setQuickLauncherWindowSize: (payload: {

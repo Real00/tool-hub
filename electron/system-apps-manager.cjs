@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { execFile, spawn } = require("node:child_process");
 const { promisify } = require("node:util");
 const { app: electronApp, shell } = require("electron");
@@ -9,6 +10,10 @@ const execFileAsync = promisify(execFile);
 
 const SEARCH_LIMIT_DEFAULT = 12;
 const SEARCH_LIMIT_MAX = 50;
+const LOOKUP_BY_ID_LIMIT = 50;
+const ICON_CACHE_DIR_NAME = "icon-cache";
+const ICON_CACHE_FILE_VERSION = 1;
+const ICON_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const INDEX_TTL_MS = 5 * 60 * 1000;
 const START_MENU_EXTENSIONS = new Set([".lnk", ".url", ".appref-ms", ".exe"]);
 const SOURCE_ORDER = ["System Tool", "Start Menu", "UWP"];
@@ -45,6 +50,9 @@ const indexState = {
 const iconState = {
   cache: new Map(),
   inFlight: new Map(),
+  cacheDirPath: "",
+  cacheDirReady: false,
+  cacheDirPromise: null,
 };
 
 function isWindowsRuntime() {
@@ -837,6 +845,230 @@ function normalizeSearchLimit(input) {
   return Math.max(1, Math.min(SEARCH_LIMIT_MAX, Math.floor(numeric)));
 }
 
+function normalizeLookupIds(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const output = [];
+  const seen = new Set();
+  for (let i = 0; i < input.length; i += 1) {
+    const id = String(input[i] ?? "").trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    output.push(id);
+    if (output.length >= LOOKUP_BY_ID_LIMIT) {
+      break;
+    }
+  }
+  return output;
+}
+
+function resolveIconCacheDirPath() {
+  if (iconState.cacheDirPath) {
+    return iconState.cacheDirPath;
+  }
+
+  try {
+    iconState.cacheDirPath = path.join(
+      electronApp.getPath("userData"),
+      ICON_CACHE_DIR_NAME,
+    );
+  } catch {
+    iconState.cacheDirPath = path.join(process.cwd(), "data", ICON_CACHE_DIR_NAME);
+  }
+  return iconState.cacheDirPath;
+}
+
+async function ensureIconCacheDir() {
+  if (iconState.cacheDirReady) {
+    return true;
+  }
+  if (iconState.cacheDirPromise) {
+    return iconState.cacheDirPromise;
+  }
+
+  const dirPath = resolveIconCacheDirPath();
+  iconState.cacheDirPromise = fs.promises.mkdir(dirPath, { recursive: true })
+    .then(() => {
+      iconState.cacheDirReady = true;
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      iconState.cacheDirPromise = null;
+    });
+  return iconState.cacheDirPromise;
+}
+
+function getIconCacheFilePath(cacheKey) {
+  const hash = crypto
+    .createHash("sha1")
+    .update(String(cacheKey ?? ""))
+    .digest("hex");
+  return path.join(resolveIconCacheDirPath(), `${hash}.json`);
+}
+
+function normalizeIconCacheMtime(input) {
+  const numeric = Number(input);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+  return Math.floor(numeric);
+}
+
+function normalizeIconCacheTimestamp(input) {
+  const numeric = Number(input);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+  return Math.floor(numeric);
+}
+
+function normalizePersistedIconCacheEntry(input) {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const candidate = input;
+  const version = Number(candidate.version ?? 0);
+  if (version !== ICON_CACHE_FILE_VERSION) {
+    return null;
+  }
+
+  const iconPath = String(candidate.iconPath ?? "").trim();
+  const cachedAt = normalizeIconCacheTimestamp(candidate.cachedAt);
+  const sourceMtimeMs = normalizeIconCacheMtime(candidate.sourceMtimeMs);
+  const dataUrlInput = candidate.dataUrl;
+  const dataUrl = typeof dataUrlInput === "string" && dataUrlInput.trim()
+    ? dataUrlInput
+    : null;
+
+  if (!iconPath || cachedAt <= 0) {
+    return null;
+  }
+
+  return {
+    version: ICON_CACHE_FILE_VERSION,
+    iconPath,
+    cachedAt,
+    sourceMtimeMs,
+    dataUrl,
+  };
+}
+
+function isIconCacheExpired(cachedAt) {
+  if (!Number.isFinite(cachedAt) || cachedAt <= 0) {
+    return true;
+  }
+  return Date.now() - cachedAt > ICON_CACHE_TTL_MS;
+}
+
+function updateMemoryIconCache(cacheKey, entry) {
+  if (!entry) {
+    iconState.cache.delete(cacheKey);
+    return;
+  }
+  iconState.cache.set(cacheKey, {
+    dataUrl: entry.dataUrl,
+    cachedAt: entry.cachedAt,
+    sourceMtimeMs: entry.sourceMtimeMs,
+  });
+}
+
+async function readIconSourceMtimeMs(iconPath) {
+  try {
+    const stats = await fs.promises.stat(iconPath);
+    return normalizeIconCacheMtime(stats.mtimeMs);
+  } catch {
+    return null;
+  }
+}
+
+async function deleteIconCacheFile(cacheKey) {
+  try {
+    await fs.promises.unlink(getIconCacheFilePath(cacheKey));
+  } catch {
+    // Ignore missing or inaccessible cache files.
+  }
+}
+
+async function readPersistedIconCache(cacheKey, iconPath) {
+  const filePath = getIconCacheFilePath(cacheKey);
+  let rawText = "";
+  try {
+    rawText = await fs.promises.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    await deleteIconCacheFile(cacheKey);
+    return null;
+  }
+
+  const normalized = normalizePersistedIconCacheEntry(parsed);
+  if (!normalized) {
+    await deleteIconCacheFile(cacheKey);
+    return null;
+  }
+  if (normalized.iconPath !== iconPath) {
+    await deleteIconCacheFile(cacheKey);
+    return null;
+  }
+  if (isIconCacheExpired(normalized.cachedAt)) {
+    await deleteIconCacheFile(cacheKey);
+    return null;
+  }
+
+  const currentMtimeMs = await readIconSourceMtimeMs(iconPath);
+  if (normalized.sourceMtimeMs !== currentMtimeMs) {
+    await deleteIconCacheFile(cacheKey);
+    return null;
+  }
+
+  updateMemoryIconCache(cacheKey, normalized);
+  return {
+    dataUrl: normalized.dataUrl,
+  };
+}
+
+async function writePersistedIconCache(cacheKey, iconPath, dataUrl) {
+  const cacheEnabled = await ensureIconCacheDir();
+  const sourceMtimeMs = await readIconSourceMtimeMs(iconPath);
+  const entry = {
+    version: ICON_CACHE_FILE_VERSION,
+    iconPath,
+    cachedAt: Date.now(),
+    sourceMtimeMs,
+    dataUrl: typeof dataUrl === "string" && dataUrl ? dataUrl : null,
+  };
+
+  updateMemoryIconCache(cacheKey, entry);
+
+  if (!cacheEnabled) {
+    return entry.dataUrl;
+  }
+
+  const filePath = getIconCacheFilePath(cacheKey);
+  const tempFilePath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await fs.promises.writeFile(tempFilePath, JSON.stringify(entry), "utf8");
+    await fs.promises.rename(tempFilePath, filePath);
+  } catch {
+    try {
+      await fs.promises.unlink(tempFilePath);
+    } catch {
+      // Ignore temp cleanup failures.
+    }
+  }
+  return entry.dataUrl;
+}
+
 function getIconLookupPath(entry) {
   if (entry.iconPath && path.isAbsolute(entry.iconPath)) {
     return entry.iconPath;
@@ -863,9 +1095,18 @@ async function loadIconDataUrl(iconPath) {
     return null;
   }
 
-  const cacheKey = iconPath.toLowerCase();
-  if (iconState.cache.has(cacheKey)) {
-    return iconState.cache.get(cacheKey);
+  const normalizedIconPath = String(iconPath).trim();
+  if (!normalizedIconPath) {
+    return null;
+  }
+
+  const cacheKey = normalizedIconPath.toLowerCase();
+  const memoryEntry = iconState.cache.get(cacheKey);
+  if (memoryEntry && !isIconCacheExpired(memoryEntry.cachedAt)) {
+    return memoryEntry.dataUrl;
+  }
+  if (memoryEntry) {
+    iconState.cache.delete(cacheKey);
   }
   if (iconState.inFlight.has(cacheKey)) {
     return iconState.inFlight.get(cacheKey);
@@ -873,29 +1114,32 @@ async function loadIconDataUrl(iconPath) {
 
   const promise = (async () => {
     try {
-      const mimeType = getImageMimeTypeByPath(iconPath);
+      const persistedCacheEntry = await readPersistedIconCache(cacheKey, normalizedIconPath);
+      if (persistedCacheEntry) {
+        return persistedCacheEntry.dataUrl;
+      }
+
+      const mimeType = getImageMimeTypeByPath(normalizedIconPath);
+      let resolvedDataUrl = null;
       if (mimeType) {
         try {
-          const fileBuffer = await fs.promises.readFile(iconPath);
-          const dataUrl = `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
-          iconState.cache.set(cacheKey, dataUrl);
-          return dataUrl;
+          const fileBuffer = await fs.promises.readFile(normalizedIconPath);
+          resolvedDataUrl = `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
         } catch {
           // Fall through to getFileIcon for paths that are protected but shell-resolvable.
         }
       }
 
-      const image = await electronApp.getFileIcon(iconPath, { size: "small" });
-      if (!image || image.isEmpty()) {
-        iconState.cache.set(cacheKey, null);
-        return null;
+      if (!resolvedDataUrl) {
+        const image = await electronApp.getFileIcon(normalizedIconPath, { size: "small" });
+        if (image && !image.isEmpty()) {
+          resolvedDataUrl = image.toDataURL();
+        }
       }
-      const dataUrl = image.toDataURL();
-      iconState.cache.set(cacheKey, dataUrl);
-      return dataUrl;
+
+      return writePersistedIconCache(cacheKey, normalizedIconPath, resolvedDataUrl);
     } catch {
-      iconState.cache.set(cacheKey, null);
-      return null;
+      return writePersistedIconCache(cacheKey, normalizedIconPath, null);
     } finally {
       iconState.inFlight.delete(cacheKey);
     }
@@ -915,6 +1159,17 @@ async function toPublicEntry(entry) {
     launchType: entry.launchType,
     acceptsLaunchPayload: supportsSystemAppLaunchPayload(entry),
     iconDataUrl: iconDataUrl || undefined,
+  };
+}
+
+function toPublicEntryBase(entry) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    source: entry.source,
+    launchType: entry.launchType,
+    acceptsLaunchPayload: supportsSystemAppLaunchPayload(entry),
+    iconDataUrl: undefined,
   };
 }
 
@@ -951,7 +1206,28 @@ async function searchSystemApps(queryInput, limitInput = SEARCH_LIMIT_DEFAULT) {
   });
 
   const topEntries = scored.slice(0, limit).map(({ item }) => item);
-  return Promise.all(topEntries.map((entry) => toPublicEntry(entry)));
+  return topEntries.map((entry) => toPublicEntryBase(entry));
+}
+
+async function getSystemAppsByIds(appIdsInput) {
+  if (!isWindowsRuntime()) {
+    return [];
+  }
+
+  const appIds = normalizeLookupIds(appIdsInput);
+  if (appIds.length === 0) {
+    return [];
+  }
+
+  await ensureIndexReady();
+  const matched = appIds
+    .map((appId) => indexState.byId.get(appId))
+    .filter(Boolean);
+
+  if (matched.length === 0) {
+    return [];
+  }
+  return Promise.all(matched.map((entry) => toPublicEntry(entry)));
 }
 
 function normalizeLaunchPayload(input) {
@@ -1051,6 +1327,7 @@ async function openSystemApp(appIdInput, launchPayloadInput) {
 }
 
 module.exports = {
+  getSystemAppsByIds,
   openSystemApp,
   refreshSystemAppsIndex,
   searchSystemApps,

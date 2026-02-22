@@ -636,6 +636,10 @@ ipcMain.handle("system-apps:search", async (_event, query, limit) => {
   return getSystemAppsManager().searchSystemApps(query, limit);
 });
 
+ipcMain.handle("system-apps:get-by-ids", async (_event, appIds) => {
+  return getSystemAppsManager().getSystemAppsByIds(appIds);
+});
+
 ipcMain.handle("system-apps:open", async (_event, appId, launchPayload) => {
   return getSystemAppsManager().openSystemApp(appId, launchPayload);
 });
@@ -723,22 +727,32 @@ if (!hasSingleInstanceLock) {
           console.warn("System apps index init failed:", error);
         });
     };
+    const prewarmQuickLauncher = () => {
+      try {
+        windowManager.prewarmQuickLauncherWindow();
+      } catch (error) {
+        console.warn("Quick launcher prewarm failed:", error);
+      }
+    };
 
     const mainWindow = windowManager.getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.once("did-finish-load", () => {
         setTimeout(bootAppsManager, 300);
         setTimeout(bootSystemAppsIndex, 600);
+        setTimeout(prewarmQuickLauncher, 800);
         autoUpdateController.scheduleStartupCheck();
       });
       mainWindow.webContents.once("did-fail-load", () => {
         setTimeout(bootAppsManager, 300);
         setTimeout(bootSystemAppsIndex, 600);
+        setTimeout(prewarmQuickLauncher, 800);
         autoUpdateController.scheduleStartupCheck();
       });
     } else {
       setTimeout(bootAppsManager, 800);
       setTimeout(bootSystemAppsIndex, 1200);
+      setTimeout(prewarmQuickLauncher, 1400);
       autoUpdateController.scheduleStartupCheck();
     }
 
@@ -750,7 +764,7 @@ if (!hasSingleInstanceLock) {
 
   app.on("before-quit", () => {
     windowManager.markQuitting();
-    windowManager.closeQuickLauncherWindow();
+    windowManager.destroyQuickLauncherWindow();
     autoUpdateController.cancelStartupCheck();
     contextDispatchController.dispose();
   });

@@ -109,6 +109,7 @@ interface ToolHubApi {
   pickInstallDirectory: () => Promise<string | null>;
   refreshSystemAppsIndex: () => Promise<number>;
   searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
+  getSystemAppsByIds: (appIds: string[]) => Promise<SystemAppEntry[]>;
   openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
   closeQuickLauncherWindow: () => Promise<boolean>;
   setQuickLauncherWindowSize: (payload: QuickLauncherWindowSizePayload) => Promise<boolean>;
@@ -344,6 +345,10 @@ export function refreshSystemAppsIndex(): Promise<number> {
 
 export function searchSystemApps(query: string, limit = 12): Promise<SystemAppEntry[]> {
   return getApi().searchSystemApps(query, limit);
+}
+
+export function getSystemAppsByIds(appIds: string[]): Promise<SystemAppEntry[]> {
+  return getApi().getSystemAppsByIds(appIds);
 }
 
 export function openSystemApp(appId: string, launchPayload?: string): Promise<boolean> {
