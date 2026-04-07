@@ -116,6 +116,18 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   updateAppTab(appId, tabId) {
     return ipcRenderer.invoke("apps:update-tab", appId, tabId);
   },
+  setAppAutoStart(appId, enabled) {
+    return ipcRenderer.invoke("apps:set-auto-start", appId, enabled);
+  },
+  listAppKv(appId) {
+    return ipcRenderer.invoke("apps:kv-list", appId);
+  },
+  deleteAppKvEntry(appId, key) {
+    return ipcRenderer.invoke("apps:kv-delete", appId, key);
+  },
+  clearAppKv(appId) {
+    return ipcRenderer.invoke("apps:kv-clear", appId);
+  },
   batchStopApps(appIds) {
     return ipcRenderer.invoke("apps:batch-stop", appIds);
   },
@@ -164,6 +176,18 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   },
   closeQuickLauncherWindow() {
     return ipcRenderer.invoke("quick-launcher:close");
+  },
+  getQuickLauncherHotkeyState() {
+    return ipcRenderer.invoke("quick-launcher:get-hotkey-state");
+  },
+  saveQuickLauncherHotkey(accelerator) {
+    return ipcRenderer.invoke("quick-launcher:save-hotkey", accelerator);
+  },
+  applyQuickLauncherHotkey(accelerator) {
+    return ipcRenderer.invoke("quick-launcher:apply-hotkey", accelerator);
+  },
+  retryQuickLauncherHotkey() {
+    return ipcRenderer.invoke("quick-launcher:retry-hotkey");
   },
   setQuickLauncherWindowSize(payload) {
     return ipcRenderer.invoke("quick-launcher:set-size", payload);

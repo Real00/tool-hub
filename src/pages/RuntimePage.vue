@@ -7,8 +7,14 @@ const route = useRoute();
 const {
     appLogs,
     appRuns,
+    appKvEntries,
     apps,
     appsInActiveTab,
+    clearKvStorage,
+    deleteKvEntry,
+    kvMessage,
+    kvStatus,
+    loadAppKv,
     loadAppLogs,
     logsStatus,
     openNodeAppWindow,
@@ -117,9 +123,18 @@ watch(
     () => selectedAppId.value,
     () => {
         refreshRuntimeData();
+        void loadAppKv(selectedAppId.value || null);
     },
     { immediate: true },
 );
+
+function formatKvValue(value: unknown): string {
+    const str = JSON.stringify(value);
+    if (str.length > 120) {
+        return str.slice(0, 120) + "…";
+    }
+    return str;
+}
 </script>
 
 <template>
@@ -244,6 +259,73 @@ watch(
                                 class="px-3 py-3 text-center text-slate-500"
                             >
                                 No runtime history selected.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </article>
+
+        <article v-if="selectedApp" class="mt-4 rounded-xl border border-slate-700 bg-slate-900/55">
+            <div class="flex items-center justify-between gap-3 border-b border-slate-700 px-4 py-3">
+                <p class="text-xs font-medium uppercase tracking-wide text-slate-300">KV Storage</p>
+                <div class="flex gap-2">
+                    <button
+                        type="button"
+                        class="rounded-md border border-slate-600 px-2.5 py-1 text-xs transition hover:border-cyan-400 hover:text-cyan-200"
+                        :disabled="kvStatus === 'loading'"
+                        @click="loadAppKv(selectedAppId)"
+                    >
+                        Refresh
+                    </button>
+                    <button
+                        type="button"
+                        class="rounded-md border border-rose-500/40 px-2.5 py-1 text-xs text-rose-200 transition hover:border-rose-400 hover:text-rose-100 disabled:opacity-40"
+                        :disabled="kvStatus === 'loading' || appKvEntries.length === 0"
+                        @click="clearKvStorage(selectedAppId)"
+                    >
+                        Clear All
+                    </button>
+                </div>
+            </div>
+            <p v-if="kvMessage" class="px-4 py-2 text-xs text-rose-300">{{ kvMessage }}</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs text-slate-300">
+                    <thead>
+                        <tr class="border-b border-slate-700 text-left text-slate-400">
+                            <th class="px-3 py-2 font-medium">Key</th>
+                            <th class="px-3 py-2 font-medium">Value</th>
+                            <th class="px-3 py-2 font-medium">Updated</th>
+                            <th class="px-3 py-2 font-medium"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr
+                            v-for="entry in appKvEntries"
+                            :key="entry.key"
+                            class="border-b border-slate-900 last:border-b-0"
+                        >
+                            <td class="px-3 py-2 font-mono">{{ entry.key }}</td>
+                            <td class="px-3 py-2 font-mono text-slate-400">{{ formatKvValue(entry.value) }}</td>
+                            <td class="px-3 py-2 text-slate-500">{{ formatRunTime(entry.updatedAt) }}</td>
+                            <td class="px-3 py-2">
+                                <button
+                                    type="button"
+                                    class="rounded border border-rose-500/30 px-2 py-0.5 text-xs text-rose-300 transition hover:border-rose-400 hover:text-rose-100"
+                                    @click="deleteKvEntry(selectedAppId, entry.key)"
+                                >
+                                    Delete
+                                </button>
+                            </td>
+                        </tr>
+                        <tr v-if="appKvEntries.length === 0 && kvStatus !== 'loading'">
+                            <td colspan="4" class="px-3 py-3 text-center text-slate-500">
+                                No KV entries found.
+                            </td>
+                        </tr>
+                        <tr v-if="kvStatus === 'loading'">
+                            <td colspan="4" class="px-3 py-3 text-center text-slate-500">
+                                Loading...
                             </td>
                         </tr>
                     </tbody>

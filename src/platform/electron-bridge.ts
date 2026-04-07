@@ -1,11 +1,13 @@
 import type {
   ConfigBackupResult,
   ConfigRestoreResult,
+  QuickLauncherHotkeyState,
   TabDefinition,
 } from "../types/settings";
 import type {
   AppCapabilityDispatchPayload,
   AppCapabilityDispatchResult,
+  AppKvListResult,
   AppLaunchContextInput,
   AppLogEvent,
   AppRunRecord,
@@ -99,6 +101,10 @@ interface ToolHubApi {
   getAppLogs: (appId: string) => Promise<string[]>;
   getAppRuns: (appId: string, limit?: number) => Promise<AppRunRecord[]>;
   updateAppTab: (appId: string, tabId: string) => Promise<InstalledApp[]>;
+  setAppAutoStart: (appId: string, enabled: boolean) => Promise<InstalledApp[]>;
+  listAppKv: (appId: string) => Promise<AppKvListResult>;
+  deleteAppKvEntry: (appId: string, key: string) => Promise<void>;
+  clearAppKv: (appId: string) => Promise<void>;
   batchRemoveApps: (appIds: string[], options?: RemoveAppOptions) => Promise<InstalledApp[]>;
   subscribeAppLogs: (appId: string, callback: (event: AppLogEvent) => void) => () => void;
   removeApp: (appId: string, options?: RemoveAppOptions) => Promise<InstalledApp[]>;
@@ -112,6 +118,10 @@ interface ToolHubApi {
   getSystemAppsByIds: (appIds: string[]) => Promise<SystemAppEntry[]>;
   openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
   closeQuickLauncherWindow: () => Promise<boolean>;
+  getQuickLauncherHotkeyState: () => Promise<QuickLauncherHotkeyState>;
+  saveQuickLauncherHotkey: (accelerator: string) => Promise<QuickLauncherHotkeyState>;
+  applyQuickLauncherHotkey: (accelerator?: string) => Promise<QuickLauncherHotkeyState>;
+  retryQuickLauncherHotkey: () => Promise<QuickLauncherHotkeyState>;
   setQuickLauncherWindowSize: (payload: QuickLauncherWindowSizePayload) => Promise<boolean>;
   getUpdateState: () => Promise<UpdateState>;
   checkForUpdates: () => Promise<UpdateState>;
@@ -304,6 +314,22 @@ export function updateAppTab(appId: string, tabId: string): Promise<InstalledApp
   return getApi().updateAppTab(appId, tabId);
 }
 
+export function setAppAutoStart(appId: string, enabled: boolean): Promise<InstalledApp[]> {
+  return getApi().setAppAutoStart(appId, enabled);
+}
+
+export function listAppKv(appId: string): Promise<AppKvListResult> {
+  return getApi().listAppKv(appId);
+}
+
+export function deleteAppKvEntry(appId: string, key: string): Promise<void> {
+  return getApi().deleteAppKvEntry(appId, key);
+}
+
+export function clearAppKv(appId: string): Promise<void> {
+  return getApi().clearAppKv(appId);
+}
+
 export function batchRemoveApps(
   appIds: string[],
   options?: RemoveAppOptions,
@@ -357,6 +383,26 @@ export function openSystemApp(appId: string, launchPayload?: string): Promise<bo
 
 export function closeQuickLauncherWindow(): Promise<boolean> {
   return getApi().closeQuickLauncherWindow();
+}
+
+export function getQuickLauncherHotkeyState(): Promise<QuickLauncherHotkeyState> {
+  return getApi().getQuickLauncherHotkeyState();
+}
+
+export function saveQuickLauncherHotkey(
+  accelerator: string,
+): Promise<QuickLauncherHotkeyState> {
+  return getApi().saveQuickLauncherHotkey(accelerator);
+}
+
+export function applyQuickLauncherHotkey(
+  accelerator?: string,
+): Promise<QuickLauncherHotkeyState> {
+  return getApi().applyQuickLauncherHotkey(accelerator);
+}
+
+export function retryQuickLauncherHotkey(): Promise<QuickLauncherHotkeyState> {
+  return getApi().retryQuickLauncherHotkey();
 }
 
 export function setQuickLauncherWindowSize(

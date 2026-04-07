@@ -77,6 +77,18 @@ export interface InstalledApp {
   capabilities: AppCapability[];
   running: boolean;
   pid: number | null;
+  autoStart: boolean;
+}
+
+export interface AppKvEntry {
+  key: string;
+  value: unknown;
+  updatedAt: number;
+}
+
+export interface AppKvListResult {
+  appId: string;
+  entries: AppKvEntry[];
 }
 
 export interface AppsRootInfo {

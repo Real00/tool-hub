@@ -2,12 +2,13 @@ import { computed, ref } from "vue";
 import { useGeneratorSession } from "./use-generator-session";
 import { defaultTabs } from "../config/settings";
 import type {
+  AppKvEntry,
   AppRunRecord,
   AppsRootInfo,
   InstalledApp,
   RemoveAppOptions,
 } from "../types/app";
-import type { TabDefinition } from "../types/settings";
+import type { QuickLauncherHotkeyState, TabDefinition } from "../types/settings";
 import type { UpdateState } from "../types/update";
 import {
   batchRemoveApps as batchRemoveAppsBridge,
@@ -18,6 +19,7 @@ import {
   getAppLogs,
   getAppRuns as getAppRunsBridge,
   getAppsRoot,
+  getQuickLauncherHotkeyState as getQuickLauncherHotkeyStateBridge,
   getSettingsTabs,
   getUpdateState as getUpdateStateBridge,
   initializeAppsDatabase,
@@ -32,12 +34,19 @@ import {
   refreshSystemAppsIndex,
   removeApp,
   restoreConfigurationFromArchive,
+  retryQuickLauncherHotkey as retryQuickLauncherHotkeyBridge,
+  applyQuickLauncherHotkey as applyQuickLauncherHotkeyBridge,
+  saveQuickLauncherHotkey as saveQuickLauncherHotkeyBridge,
   saveSettingsTabs,
   startApp,
   stopApp,
   subscribeAppLogs as subscribeAppLogsBridge,
   subscribeUpdateEvents,
   updateAppTab as updateAppTabBridge,
+  setAppAutoStart as setAppAutoStartBridge,
+  listAppKv as listAppKvBridge,
+  deleteAppKvEntry as deleteAppKvEntryBridge,
+  clearAppKv as clearAppKvBridge,
 } from "../platform/electron-bridge";
 
 function formatError(error: unknown): string {
@@ -50,6 +59,7 @@ function formatError(error: unknown): string {
 const APP_ALREADY_INSTALLED_PREFIX = "APP_ALREADY_INSTALLED:";
 const MAX_RENDERED_LOG_LINES = 400;
 const APP_RUN_HISTORY_LIMIT = 40;
+const DEFAULT_QUICK_LAUNCHER_HOTKEY = "Alt+Space";
 
 function parseAlreadyInstalledAppId(error: unknown): string | null {
   const message = formatError(error).trim();
@@ -115,6 +125,36 @@ function createDisabledUpdateState(message: string): UpdateState {
   };
 }
 
+function createDefaultQuickLauncherHotkeyState(): QuickLauncherHotkeyState {
+  return {
+    configuredAccelerator: DEFAULT_QUICK_LAUNCHER_HOTKEY,
+    activeAccelerator: null,
+    registered: false,
+    lastError: null,
+    updatedAt: Date.now(),
+  };
+}
+
+function normalizeHotkeyDraft(input: string): string {
+  return String(input ?? "").trim();
+}
+
+function formatQuickLauncherHotkeyStateMessage(state: QuickLauncherHotkeyState): string {
+  if (state.registered) {
+    return `Quick launcher hotkey active: ${state.activeAccelerator ?? state.configuredAccelerator}.`;
+  }
+  if (state.lastError === "occupied") {
+    return `Hotkey is occupied by another app: ${state.configuredAccelerator}.`;
+  }
+  if (state.lastError === "invalid") {
+    return `Invalid hotkey format: ${state.configuredAccelerator}.`;
+  }
+  if (state.lastError === "unknown") {
+    return `Hotkey is not registered: ${state.configuredAccelerator}.`;
+  }
+  return `Hotkey is not active: ${state.configuredAccelerator}.`;
+}
+
 function createToolHubState() {
   const tabs = ref<TabDefinition[]>(defaultTabs.map((tab) => ({ ...tab })));
   const apps = ref<InstalledApp[]>([]);
@@ -135,6 +175,16 @@ function createToolHubState() {
   const updateState = ref<UpdateState>(
     createDisabledUpdateState("Automatic updates are only available in Electron runtime."),
   );
+  const quickLauncherHotkeyState = ref<QuickLauncherHotkeyState>(
+    createDefaultQuickLauncherHotkeyState(),
+  );
+  const quickLauncherHotkeyDraft = ref(DEFAULT_QUICK_LAUNCHER_HOTKEY);
+  const quickLauncherHotkeyStatus = ref<"idle" | "loading" | "success" | "error">(
+    "idle",
+  );
+  const quickLauncherHotkeyMessage = ref(
+    "Quick launcher hotkey can be configured and applied immediately.",
+  );
 
   const settingsStatus = ref<"idle" | "saving" | "success" | "error">("idle");
   const settingsMessage = ref("Edit tabs and save to local SQLite.");
@@ -153,6 +203,10 @@ function createToolHubState() {
   const logsAppId = ref<string | null>(null);
   const appRuns = ref<AppRunRecord[]>([]);
   const runsStatus = ref<"idle" | "loading" | "success" | "error">("idle");
+
+  const appKvEntries = ref<AppKvEntry[]>([]);
+  const kvStatus = ref<"idle" | "loading" | "error">("idle");
+  const kvMessage = ref("");
 
   let appsPollingTimer: ReturnType<typeof setInterval> | null = null;
   let appsInitialLoadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -481,6 +535,102 @@ function createToolHubState() {
     }
   }
 
+  function applyQuickLauncherHotkeyState(next: QuickLauncherHotkeyState) {
+    quickLauncherHotkeyState.value = { ...next };
+    quickLauncherHotkeyDraft.value = next.configuredAccelerator;
+  }
+
+  async function loadQuickLauncherHotkeyState() {
+    if (!isElectronRuntime()) {
+      quickLauncherHotkeyState.value = createDefaultQuickLauncherHotkeyState();
+      quickLauncherHotkeyDraft.value = DEFAULT_QUICK_LAUNCHER_HOTKEY;
+      quickLauncherHotkeyStatus.value = "error";
+      quickLauncherHotkeyMessage.value =
+        "Global hotkey is only available in Electron runtime.";
+      return;
+    }
+
+    quickLauncherHotkeyStatus.value = "loading";
+    quickLauncherHotkeyMessage.value = "Loading quick launcher hotkey state...";
+
+    try {
+      const state = await getQuickLauncherHotkeyStateBridge();
+      applyQuickLauncherHotkeyState(state);
+      quickLauncherHotkeyStatus.value = state.registered
+        ? "success"
+        : state.lastError
+          ? "error"
+          : "idle";
+      quickLauncherHotkeyMessage.value =
+        formatQuickLauncherHotkeyStateMessage(state);
+    } catch (error) {
+      quickLauncherHotkeyStatus.value = "error";
+      quickLauncherHotkeyMessage.value = `Load hotkey failed: ${formatError(error)}`;
+    }
+  }
+
+  async function saveAndApplyQuickLauncherHotkey() {
+    if (!isElectronRuntime()) {
+      quickLauncherHotkeyStatus.value = "error";
+      quickLauncherHotkeyMessage.value =
+        "Global hotkey is only available in Electron runtime.";
+      return;
+    }
+
+    const normalized = normalizeHotkeyDraft(quickLauncherHotkeyDraft.value);
+    if (!normalized) {
+      quickLauncherHotkeyStatus.value = "error";
+      quickLauncherHotkeyMessage.value = "Hotkey cannot be empty.";
+      return;
+    }
+
+    quickLauncherHotkeyDraft.value = normalized;
+    quickLauncherHotkeyStatus.value = "loading";
+    quickLauncherHotkeyMessage.value =
+      `Saving and applying hotkey: ${normalized}...`;
+
+    try {
+      await saveQuickLauncherHotkeyBridge(normalized);
+      const state = await applyQuickLauncherHotkeyBridge();
+      applyQuickLauncherHotkeyState(state);
+      quickLauncherHotkeyStatus.value = state.registered ? "success" : "error";
+      quickLauncherHotkeyMessage.value =
+        formatQuickLauncherHotkeyStateMessage(state);
+    } catch (error) {
+      quickLauncherHotkeyStatus.value = "error";
+      quickLauncherHotkeyMessage.value = `Apply hotkey failed: ${formatError(error)}`;
+    }
+  }
+
+  async function retryQuickLauncherHotkeyRegistration() {
+    if (!isElectronRuntime()) {
+      quickLauncherHotkeyStatus.value = "error";
+      quickLauncherHotkeyMessage.value =
+        "Global hotkey is only available in Electron runtime.";
+      return;
+    }
+
+    quickLauncherHotkeyStatus.value = "loading";
+    quickLauncherHotkeyMessage.value =
+      `Retrying hotkey registration: ${quickLauncherHotkeyState.value.configuredAccelerator}...`;
+
+    try {
+      const state = await retryQuickLauncherHotkeyBridge();
+      applyQuickLauncherHotkeyState(state);
+      quickLauncherHotkeyStatus.value = state.registered ? "success" : "error";
+      quickLauncherHotkeyMessage.value =
+        formatQuickLauncherHotkeyStateMessage(state);
+    } catch (error) {
+      quickLauncherHotkeyStatus.value = "error";
+      quickLauncherHotkeyMessage.value = `Retry hotkey failed: ${formatError(error)}`;
+    }
+  }
+
+  async function restoreDefaultQuickLauncherHotkey() {
+    quickLauncherHotkeyDraft.value = DEFAULT_QUICK_LAUNCHER_HOTKEY;
+    await saveAndApplyQuickLauncherHotkey();
+  }
+
   async function backupConfigData() {
     if (!isElectronRuntime()) {
       backupStatus.value = "error";
@@ -544,6 +694,7 @@ function createToolHubState() {
         ? `Restore completed from ${result.archivePath}. Restart app for a clean state.`
         : `Restore completed from ${result.archivePath}.`;
       await loadTabsFromStorage();
+      await loadQuickLauncherHotkeyState();
       await loadAppsData();
       await loadGeneratorProjects();
     } catch (error) {
@@ -876,6 +1027,61 @@ function createToolHubState() {
     }
   }
 
+  async function toggleAppAutoStart(appId: string, enabled: boolean) {
+    if (!isElectronRuntime()) {
+      return;
+    }
+    try {
+      const list = await setAppAutoStartBridge(appId, enabled);
+      applyApps(list);
+    } catch (error) {
+      appsMessage.value = `Auto-start update failed: ${formatError(error)}`;
+    }
+  }
+
+  async function loadAppKv(appId: string | null) {
+    if (!appId || !isElectronRuntime()) {
+      appKvEntries.value = [];
+      kvStatus.value = "idle";
+      kvMessage.value = "";
+      return;
+    }
+    kvStatus.value = "loading";
+    kvMessage.value = "";
+    try {
+      const result = await listAppKvBridge(appId);
+      appKvEntries.value = result.entries;
+      kvStatus.value = "idle";
+    } catch (error) {
+      kvStatus.value = "error";
+      kvMessage.value = `Load KV failed: ${formatError(error)}`;
+    }
+  }
+
+  async function deleteKvEntry(appId: string, key: string) {
+    if (!isElectronRuntime()) {
+      return;
+    }
+    try {
+      await deleteAppKvEntryBridge(appId, key);
+      await loadAppKv(appId);
+    } catch (error) {
+      kvMessage.value = `Delete KV entry failed: ${formatError(error)}`;
+    }
+  }
+
+  async function clearKvStorage(appId: string) {
+    if (!isElectronRuntime()) {
+      return;
+    }
+    try {
+      await clearAppKvBridge(appId);
+      appKvEntries.value = [];
+    } catch (error) {
+      kvMessage.value = `Clear KV storage failed: ${formatError(error)}`;
+    }
+  }
+
   async function batchStopNodeApps(appIds: string[]) {
     if (!isElectronRuntime()) {
       appsStatus.value = "error";
@@ -1034,11 +1240,17 @@ function createToolHubState() {
       updateState.value = createDisabledUpdateState(
         "Automatic updates are only available in Electron runtime.",
       );
+      quickLauncherHotkeyState.value = createDefaultQuickLauncherHotkeyState();
+      quickLauncherHotkeyDraft.value = DEFAULT_QUICK_LAUNCHER_HOTKEY;
+      quickLauncherHotkeyStatus.value = "error";
+      quickLauncherHotkeyMessage.value =
+        "Global hotkey is only available in Electron runtime.";
     }
 
     bridgeAndTabsLoadTimer = setTimeout(() => {
       void loadTabsFromStorage();
       void testElectronBridge();
+      void loadQuickLauncherHotkeyState();
       void loadGeneratorSettingsFromStorage();
       void loadGeneratorProjects();
     }, 120);
@@ -1151,9 +1363,13 @@ function createToolHubState() {
     runsStatus,
     runtimeLabel,
     loadUpdateState,
+    loadQuickLauncherHotkeyState,
     refreshSystemAppsData,
+    retryQuickLauncherHotkeyRegistration,
     resizeEmbeddedTerminal,
+    restoreDefaultQuickLauncherHotkey,
     saveClaudePathConfig,
+    saveAndApplyQuickLauncherHotkey,
     saveTabsToStorage,
     selectGeneratorProject,
     sendEmbeddedTerminalData,
@@ -1170,8 +1386,19 @@ function createToolHubState() {
     testElectronBridge,
     toggleOverview,
     updateState,
+    quickLauncherHotkeyState,
+    quickLauncherHotkeyDraft,
+    quickLauncherHotkeyStatus,
+    quickLauncherHotkeyMessage,
     updateNodeAppTab,
     verifyCommand,
+    toggleAppAutoStart,
+    appKvEntries,
+    kvStatus,
+    kvMessage,
+    loadAppKv,
+    deleteKvEntry,
+    clearKvStorage,
   };
 }
 

@@ -26,6 +26,7 @@ import type {
 import type {
   ConfigBackupResult,
   ConfigRestoreResult,
+  QuickLauncherHotkeyState,
   TabDefinition,
 } from "./types/settings";
 import type { SystemAppEntry } from "./types/system-app";
@@ -97,6 +98,10 @@ declare global {
     getAppLogs: (appId: string) => Promise<string[]>;
     getAppRuns: (appId: string, limit?: number) => Promise<AppRunRecord[]>;
     updateAppTab: (appId: string, tabId: string) => Promise<InstalledApp[]>;
+    setAppAutoStart: (appId: string, enabled: boolean) => Promise<InstalledApp[]>;
+    listAppKv: (appId: string) => Promise<{ appId: string; entries: Array<{ key: string; value: unknown; updatedAt: number }> }>;
+    deleteAppKvEntry: (appId: string, key: string) => Promise<void>;
+    clearAppKv: (appId: string) => Promise<void>;
     batchRemoveApps: (
       appIds: string[],
       options?: RemoveAppOptions,
@@ -116,6 +121,10 @@ declare global {
     getSystemAppsByIds: (appIds: string[]) => Promise<SystemAppEntry[]>;
     openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
     closeQuickLauncherWindow: () => Promise<boolean>;
+    getQuickLauncherHotkeyState: () => Promise<QuickLauncherHotkeyState>;
+    saveQuickLauncherHotkey: (accelerator: string) => Promise<QuickLauncherHotkeyState>;
+    applyQuickLauncherHotkey: (accelerator?: string) => Promise<QuickLauncherHotkeyState>;
+    retryQuickLauncherHotkey: () => Promise<QuickLauncherHotkeyState>;
     setQuickLauncherWindowSize: (payload: {
       mode: "compact" | "expanded";
       resultCount?: number;

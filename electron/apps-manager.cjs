@@ -93,6 +93,10 @@ async function initDb() {
   if (!hasCapabilitiesJson) {
     await db.exec("ALTER TABLE apps ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]';");
   }
+  const hasAutoStart = columns.some((col) => col.name === "auto_start");
+  if (!hasAutoStart) {
+    await db.exec("ALTER TABLE apps ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0;");
+  }
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS app_runs (
@@ -383,7 +387,7 @@ async function loadAppsRows(options = {}) {
 
   const db = await getDb();
   const rows = await db.all(
-    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json FROM apps ORDER BY name ASC",
+    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json, auto_start FROM apps ORDER BY name ASC",
   );
   appsRowsCache = {
     rows: cloneRows(rows),
@@ -518,6 +522,7 @@ function hasAppRecordChanged(existing, incoming, tabId) {
     (existing.ui_value ?? null) !== (incoming.uiValue ?? null) ||
     existing.env_json !== incoming.envJson ||
     String(existing.capabilities_json ?? "[]") !== String(incoming.capabilitiesJson ?? "[]")
+    // auto_start is user-managed; not compared here so scan never resets it
   );
 }
 
@@ -525,7 +530,7 @@ async function syncDiscoveredApps(discovered) {
   return runSerializedWrite(async () => {
     const db = await getDb();
     const existingRows = await db.all(
-      "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json FROM apps",
+      "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json, auto_start FROM apps",
     );
     const existingById = new Map(existingRows.map((row) => [row.id, row]));
 
@@ -731,6 +736,7 @@ async function toAppView(record) {
     capabilities: parseCapabilitiesJson(record.capabilities_json),
     running: !!runtime,
     pid: runtime?.pid ?? null,
+    autoStart: record.auto_start === 1,
   };
 }
 
@@ -745,7 +751,7 @@ async function listApps() {
 async function getAppRecord(appId) {
   const db = await getDb();
   return db.get(
-    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json FROM apps WHERE id = ?",
+    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json, auto_start FROM apps WHERE id = ?",
     appId,
   );
 }
@@ -754,7 +760,7 @@ async function getAppRecordFresh(appId) {
   await scanAndSyncApps({ force: true });
   const db = await getDb();
   return db.get(
-    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json FROM apps WHERE id = ?",
+    "SELECT id, name, version, tab_id, app_dir, entry_rel, ui_kind, ui_value, env_json, capabilities_json, auto_start FROM apps WHERE id = ?",
     appId,
   );
 }
@@ -1489,6 +1495,33 @@ async function closeAppsManager() {
   return true;
 }
 
+async function setAppAutoStart(appIdInput, enabled) {
+  const appId = normalizeAppId(appIdInput, "");
+  if (!appId) {
+    throw new Error("Invalid app id.");
+  }
+  await runSerializedWrite(async () => {
+    const db = await getDb();
+    const result = await db.run(
+      "UPDATE apps SET auto_start = ?, updated_at = ? WHERE id = ?",
+      enabled ? 1 : 0,
+      Date.now(),
+      appId,
+    );
+    if (Number(result?.changes ?? 0) === 0) {
+      throw new Error(`App not found: ${appId}`);
+    }
+    invalidateAppsRowsCache();
+  });
+  return listApps();
+}
+
+async function listAutoStartApps() {
+  const db = await getDb();
+  const rows = await db.all("SELECT id FROM apps WHERE auto_start = 1");
+  return rows.map((row) => String(row.id));
+}
+
 module.exports = {
   clearAppStorage,
   closeAppsManager,
@@ -1502,6 +1535,8 @@ module.exports = {
   installAppFromDirectory,
   listAppStorage,
   listApps,
+  listAutoStartApps,
+  setAppAutoStart,
   readAppFile,
   readSystemFile,
   removeApp,

@@ -80,6 +80,7 @@ const CONTEXT_DISPATCH_SOURCE_EXPLORER = "explorer-context-menu";
 const CONTEXT_DISPATCH_AGGREGATE_WINDOW_MS = 650;
 const CONTEXT_DISPATCH_MAX_QUEUE = 32;
 const CONTEXT_DISPATCH_PENDING_TTL_MS = 5000;
+const DEFAULT_QUICK_LAUNCHER_HOTKEY = "Alt+Space";
 
 function bootTrace(message) {
   if (!bootTraceEnabled) {
@@ -225,6 +226,24 @@ function ensureWindowsContextMenuRegistered() {
       "Windows context menu registration skipped:",
       error instanceof Error ? error.message : String(error),
     );
+  }
+}
+
+function normalizeQuickLauncherHotkey(input) {
+  return String(input ?? "").trim();
+}
+
+async function loadQuickLauncherHotkeyFromSettings() {
+  try {
+    const stored = await getSettingsStore().getQuickLauncherHotkey();
+    const normalized = normalizeQuickLauncherHotkey(stored);
+    return normalized || DEFAULT_QUICK_LAUNCHER_HOTKEY;
+  } catch (error) {
+    console.warn(
+      "Quick launcher hotkey load failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return DEFAULT_QUICK_LAUNCHER_HOTKEY;
   }
 }
 
@@ -497,6 +516,22 @@ ipcMain.handle("apps:update-tab", async (_event, appId, tabId) => {
   return getAppsManager().updateAppTab(appId, tabId);
 });
 
+ipcMain.handle("apps:set-auto-start", async (_event, appId, enabled) => {
+  return getAppsManager().setAppAutoStart(appId, enabled);
+});
+
+ipcMain.handle("apps:kv-list", async (_event, appId) => {
+  return getAppsManager().listAppStorage(appId);
+});
+
+ipcMain.handle("apps:kv-delete", async (_event, appId, key) => {
+  return getAppsManager().deleteAppStorageKey(appId, key);
+});
+
+ipcMain.handle("apps:kv-clear", async (_event, appId) => {
+  return getAppsManager().clearAppStorage(appId);
+});
+
 ipcMain.handle("apps:remove", async (_event, appId, options) => {
   appRuntimeController.closeAppWindowById(appId);
   return getAppsManager().removeApp(appId, options);
@@ -649,6 +684,34 @@ ipcMain.handle("quick-launcher:close", async () => {
   return true;
 });
 
+ipcMain.handle("quick-launcher:get-hotkey-state", async () => {
+  return windowManager.getQuickLauncherHotkeyState();
+});
+
+ipcMain.handle("quick-launcher:save-hotkey", async (_event, accelerator) => {
+  const normalized = normalizeQuickLauncherHotkey(accelerator);
+  if (!normalized) {
+    throw new Error("Quick launcher hotkey cannot be empty.");
+  }
+  const saved = await getSettingsStore().saveQuickLauncherHotkey(normalized);
+  return windowManager.setQuickLauncherHotkey(saved);
+});
+
+ipcMain.handle("quick-launcher:apply-hotkey", async (_event, accelerator) => {
+  if (typeof accelerator === "string") {
+    const normalized = normalizeQuickLauncherHotkey(accelerator);
+    if (!normalized) {
+      throw new Error("Quick launcher hotkey cannot be empty.");
+    }
+    return windowManager.applyQuickLauncherHotkey(normalized);
+  }
+  return windowManager.applyQuickLauncherHotkey();
+});
+
+ipcMain.handle("quick-launcher:retry-hotkey", async () => {
+  return windowManager.retryQuickLauncherHotkey();
+});
+
 ipcMain.handle("quick-launcher:set-size", async (_event, mode) => {
   windowManager.setQuickLauncherWindowSize(mode);
   return true;
@@ -698,13 +761,17 @@ if (!hasSingleInstanceLock) {
     windowManager.updateTrayMenu();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     bootTrace("app.whenReady");
     Menu.setApplicationMenu(null);
     ensureWindowsContextMenuRegistered();
     windowManager.createMainWindow();
     windowManager.createTray();
-    windowManager.registerQuickLauncherHotkey(globalShortcut);
+    const configuredQuickLauncherHotkey = await loadQuickLauncherHotkeyFromSettings();
+    windowManager.registerQuickLauncherHotkey(
+      globalShortcut,
+      configuredQuickLauncherHotkey,
+    );
     autoUpdateController.initialize();
     const startupContextTargetCount = contextDispatchController.queueTargetsFromArgv(
       process.argv,
@@ -719,6 +786,18 @@ if (!hasSingleInstanceLock) {
         .catch((error) => {
           console.error("Apps manager init failed:", error);
         });
+    };
+    const bootAutoStartApps = async () => {
+      try {
+        const ids = await getAppsManager().listAutoStartApps();
+        for (const id of ids) {
+          await getAppsManager().startApp(id).catch((err) => {
+            console.warn(`[auto-start] Failed to start app "${id}":`, err instanceof Error ? err.message : String(err));
+          });
+        }
+      } catch (err) {
+        console.warn("[auto-start] Boot failed:", err instanceof Error ? err.message : String(err));
+      }
     };
     const bootSystemAppsIndex = () => {
       void getSystemAppsManager()
@@ -741,18 +820,21 @@ if (!hasSingleInstanceLock) {
         setTimeout(bootAppsManager, 300);
         setTimeout(bootSystemAppsIndex, 600);
         setTimeout(prewarmQuickLauncher, 800);
+        setTimeout(bootAutoStartApps, 2000);
         autoUpdateController.scheduleStartupCheck();
       });
       mainWindow.webContents.once("did-fail-load", () => {
         setTimeout(bootAppsManager, 300);
         setTimeout(bootSystemAppsIndex, 600);
         setTimeout(prewarmQuickLauncher, 800);
+        setTimeout(bootAutoStartApps, 2000);
         autoUpdateController.scheduleStartupCheck();
       });
     } else {
       setTimeout(bootAppsManager, 800);
       setTimeout(bootSystemAppsIndex, 1200);
       setTimeout(prewarmQuickLauncher, 1400);
+      setTimeout(bootAutoStartApps, 2500);
       autoUpdateController.scheduleStartupCheck();
     }
 

@@ -3,7 +3,7 @@ import { useRouter } from "vue-router";
 import { useToolHubState } from "../composables/use-tool-hub-state";
 
 const router = useRouter();
-const { activeTabLabel, appsInActiveTab, openNodeAppWindow, removeNodeApp, stopNodeApp } = useToolHubState();
+const { activeTabLabel, appsInActiveTab, openNodeAppWindow, removeNodeApp, stopNodeApp, toggleAppAutoStart } = useToolHubState();
 
 function openRuntimePage(appId: string) {
     void router.push({
@@ -83,6 +83,16 @@ function openRuntimePage(appId: string) {
                     @click="openRuntimePage(appItem.id)"
                 >
                     Runtime
+                </button>
+                <button
+                    type="button"
+                    class="rounded-md border px-2.5 py-1.5 text-xs transition"
+                    :class="appItem.autoStart
+                        ? 'border-cyan-500/60 text-cyan-300 hover:border-cyan-400'
+                        : 'border-slate-600 text-slate-400 hover:border-slate-400 hover:text-slate-200'"
+                    @click="toggleAppAutoStart(appItem.id, !appItem.autoStart)"
+                >
+                    {{ appItem.autoStart ? 'Auto-start On' : 'Auto-start Off' }}
                 </button>
                 <button
                     type="button"
