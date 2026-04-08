@@ -637,6 +637,9 @@ function collectBuiltinApps() {
 }
 
 function buildDedupeKey(item) {
+  if (item.launchType === "internal") {
+    return `internal:${String(item.id ?? "").trim().toLowerCase()}`;
+  }
   if (item.launchType === "command") {
     return `command:${normalizeLaunchTarget(item.launchTarget)}:${item.launchArgs
       .map((arg) => normalizeLaunchTarget(arg))
@@ -1151,12 +1154,17 @@ async function loadIconDataUrl(iconPath) {
 
 async function toPublicEntry(entry) {
   const iconPath = getIconLookupPath(entry);
-  const iconDataUrl = await loadIconDataUrl(iconPath);
+  const inlineIconDataUrl = typeof entry.iconDataUrl === "string" && entry.iconDataUrl.trim()
+    ? entry.iconDataUrl.trim()
+    : "";
+  const iconDataUrl = inlineIconDataUrl || await loadIconDataUrl(iconPath);
   return {
     id: entry.id,
     name: entry.name,
     source: entry.source,
     launchType: entry.launchType,
+    category: entry.category,
+    description: entry.description,
     acceptsLaunchPayload: supportsSystemAppLaunchPayload(entry),
     iconDataUrl: iconDataUrl || undefined,
   };
@@ -1168,8 +1176,13 @@ function toPublicEntryBase(entry) {
     name: entry.name,
     source: entry.source,
     launchType: entry.launchType,
+    category: entry.category,
+    description: entry.description,
     acceptsLaunchPayload: supportsSystemAppLaunchPayload(entry),
-    iconDataUrl: undefined,
+    iconDataUrl:
+      typeof entry.iconDataUrl === "string" && entry.iconDataUrl.trim()
+        ? entry.iconDataUrl.trim()
+        : undefined,
   };
 }
 
@@ -1321,6 +1334,10 @@ async function openSystemApp(appIdInput, launchPayloadInput) {
       resolve();
     });
     return true;
+  }
+
+  if (appEntry.launchType === "internal") {
+    throw new Error(`Internal system app requires host handling: ${appEntry.id}`);
   }
 
   throw new Error(`Unsupported launch type: ${appEntry.launchType}`);

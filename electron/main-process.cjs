@@ -4,11 +4,13 @@ const {
   Menu,
   Notification,
   Tray,
+  desktopCapturer,
   dialog,
   globalShortcut,
   ipcMain,
   nativeImage,
   screen,
+  session,
   shell,
 } = require("electron");
 const fs = require("node:fs");
@@ -21,6 +23,7 @@ const { createWindowManager } = require("./main-process/window-manager.cjs");
 const { createAppRuntimeWindowsController } = require("./main-process/app-runtime-windows.cjs");
 const { createContextDispatchController } = require("./main-process/context-dispatch.cjs");
 const { createConfigRestoreController } = require("./main-process/config-restore.cjs");
+const { createSystemRecorderManager } = require("./system-recorder-manager.cjs");
 
 // Lazily loaded heavy modules; restore flow temporarily gates access.
 let appsManagerModule = null;
@@ -188,6 +191,22 @@ const autoUpdateController = createAutoUpdateController({
   startupDelayMs: AUTO_UPDATE_STARTUP_DELAY_MS,
   onBeforeInstall: () => {
     windowManager.markQuitting();
+  },
+});
+
+const systemRecorderManager = createSystemRecorderManager({
+  app,
+  appName: APP_NAME,
+  desktopCapturer,
+  dialog,
+  screen,
+  getMainWindow: () => windowManager.getMainWindow(),
+  getSettingsStore,
+});
+
+windowManager.setSystemRecorderLifecycle({
+  onWindowUnavailable: (reason) => {
+    void systemRecorderManager.abortActiveRecorder(reason);
   },
 });
 
@@ -676,7 +695,47 @@ ipcMain.handle("system-apps:get-by-ids", async (_event, appIds) => {
 });
 
 ipcMain.handle("system-apps:open", async (_event, appId, launchPayload) => {
+  if (systemRecorderManager.isRecorderSystemAppId(appId)) {
+    windowManager.showSystemRecorderWindow(appId);
+    return true;
+  }
   return getSystemAppsManager().openSystemApp(appId, launchPayload);
+});
+
+ipcMain.handle("system-recorder:get-state", async () => {
+  return systemRecorderManager.getRecorderState();
+});
+
+ipcMain.handle("system-recorder:list-sources", async (_event, mode) => {
+  return systemRecorderManager.listRecorderSources(mode);
+});
+
+ipcMain.handle("system-recorder:prepare-preview", async (_event, input) => {
+  return systemRecorderManager.preparePreviewCapture(input);
+});
+
+ipcMain.handle("system-recorder:start", async (_event, input) => {
+  return systemRecorderManager.startRecorder(input);
+});
+
+ipcMain.handle("system-recorder:append-chunk", async (_event, sessionId, chunk) => {
+  return systemRecorderManager.appendRecordingChunk(sessionId, chunk);
+});
+
+ipcMain.handle("system-recorder:finish", async (_event, sessionId) => {
+  return systemRecorderManager.finishRecorder(sessionId);
+});
+
+ipcMain.handle("system-recorder:abort", async (_event, sessionId, errorMessage) => {
+  return systemRecorderManager.abortRecorder(sessionId, errorMessage);
+});
+
+ipcMain.handle("system-recorder:pick-ffmpeg-path", async () => {
+  return systemRecorderManager.pickAndSaveFfmpegPath();
+});
+
+ipcMain.handle("system-recorder:set-ffmpeg-path", async (_event, filePath) => {
+  return systemRecorderManager.setFfmpegPath(filePath);
 });
 
 ipcMain.handle("quick-launcher:close", async () => {
@@ -764,6 +823,12 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     bootTrace("app.whenReady");
     Menu.setApplicationMenu(null);
+    session.fromPartition(windowManager.getSystemRecorderPartition()).setDisplayMediaRequestHandler(
+      (request, callback) => {
+        systemRecorderManager.handleDisplayMediaRequest(request, callback);
+      },
+      { useSystemPicker: false },
+    );
     ensureWindowsContextMenuRegistered();
     windowManager.createMainWindow();
     windowManager.createTray();
@@ -847,8 +912,10 @@ if (!hasSingleInstanceLock) {
   app.on("before-quit", () => {
     windowManager.markQuitting();
     windowManager.destroyQuickLauncherWindow();
+    windowManager.closeSystemRecorderWindow();
     autoUpdateController.cancelStartupCheck();
     contextDispatchController.dispose();
+    void systemRecorderManager.dispose();
   });
 
   app.on("will-quit", () => {

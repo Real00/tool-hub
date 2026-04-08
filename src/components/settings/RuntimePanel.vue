@@ -20,9 +20,17 @@ const {
     testElectronBridge,
     toggleOverview,
     loadUpdateState,
+    loadQuickLauncherHotkeyState,
     checkForAppUpdates,
     downloadAppUpdate,
     installAppUpdate,
+    quickLauncherHotkeyDraft,
+    quickLauncherHotkeyMessage,
+    quickLauncherHotkeyState,
+    quickLauncherHotkeyStatus,
+    retryQuickLauncherHotkeyRegistration,
+    restoreDefaultQuickLauncherHotkey,
+    saveAndApplyQuickLauncherHotkey,
 } = useToolHubState();
 
 const canDownloadUpdate = computed(() => updateState.value.status === "available");
@@ -41,6 +49,28 @@ const updateProgressText = computed(() => {
         return "";
     }
     return `${progress.percent.toFixed(1)}% (${progress.transferred}/${progress.total})`;
+});
+const isApplyingQuickLauncherHotkey = computed(
+    () => quickLauncherHotkeyStatus.value === "loading",
+);
+const quickLauncherHotkeyUpdatedAtText = computed(() => {
+    const updatedAt = quickLauncherHotkeyState.value.updatedAt;
+    if (!updatedAt) {
+        return "";
+    }
+    return new Date(updatedAt).toLocaleString();
+});
+const quickLauncherHotkeyErrorText = computed(() => {
+    if (quickLauncherHotkeyState.value.lastError === "occupied") {
+        return "当前组合键已被其他程序占用，请更换组合键或稍后重试注册。";
+    }
+    if (quickLauncherHotkeyState.value.lastError === "invalid") {
+        return "快捷键格式无效，请使用 Electron accelerator 格式（例如 Alt+Space）。";
+    }
+    if (quickLauncherHotkeyState.value.lastError === "unknown") {
+        return "快捷键注册失败（未知错误），可点击重试注册。";
+    }
+    return "";
 });
 </script>
 
@@ -232,6 +262,88 @@ const updateProgressText = computed(() => {
             >
                 Install and Restart
             </button>
+        </div>
+        <div class="mt-4 rounded-xl border border-slate-700 bg-slate-950/60 px-4 py-3">
+            <p class="text-xs font-medium text-slate-100">Quick Launcher Hotkey</p>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                    v-model="quickLauncherHotkeyDraft"
+                    type="text"
+                    class="w-full max-w-sm rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs text-slate-100 outline-none transition focus:border-cyan-400"
+                    placeholder="Alt+Space"
+                    spellcheck="false"
+                >
+                <button
+                    type="button"
+                    class="rounded-lg border border-cyan-500/40 px-3 py-1.5 text-xs text-cyan-200 transition hover:border-cyan-300 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="isApplyingQuickLauncherHotkey"
+                    @click="saveAndApplyQuickLauncherHotkey"
+                >
+                    Apply Now
+                </button>
+                <button
+                    type="button"
+                    class="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="isApplyingQuickLauncherHotkey"
+                    @click="retryQuickLauncherHotkeyRegistration"
+                >
+                    Retry Register
+                </button>
+                <button
+                    type="button"
+                    class="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="isApplyingQuickLauncherHotkey"
+                    @click="restoreDefaultQuickLauncherHotkey"
+                >
+                    Restore Default
+                </button>
+                <button
+                    type="button"
+                    class="rounded-lg border border-slate-600 px-3 py-1.5 text-xs text-slate-200 transition hover:border-cyan-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="isApplyingQuickLauncherHotkey"
+                    @click="loadQuickLauncherHotkeyState"
+                >
+                    Refresh Hotkey State
+                </button>
+            </div>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+                <span
+                    class="rounded-md px-2 py-1 text-xs"
+                    :class="
+                        quickLauncherHotkeyStatus === 'success'
+                            ? 'bg-emerald-500/20 text-emerald-200'
+                            : quickLauncherHotkeyStatus === 'error'
+                              ? 'bg-rose-500/20 text-rose-200'
+                              : quickLauncherHotkeyStatus === 'loading'
+                                ? 'bg-amber-500/20 text-amber-200'
+                                : 'bg-slate-800 text-slate-300'
+                    "
+                >
+                    Hotkey: {{ quickLauncherHotkeyStatus }}
+                </span>
+                <span class="text-xs text-slate-400">
+                    Configured {{ quickLauncherHotkeyState.configuredAccelerator }}
+                </span>
+                <span
+                    v-if="quickLauncherHotkeyState.activeAccelerator"
+                    class="text-xs text-slate-400"
+                >
+                    Active {{ quickLauncherHotkeyState.activeAccelerator }}
+                </span>
+                <span
+                    v-if="quickLauncherHotkeyUpdatedAtText"
+                    class="text-xs text-slate-400"
+                >
+                    Updated {{ quickLauncherHotkeyUpdatedAtText }}
+                </span>
+            </div>
+            <p class="mt-2 text-xs text-slate-400">{{ quickLauncherHotkeyMessage }}</p>
+            <p
+                v-if="quickLauncherHotkeyErrorText"
+                class="mt-1 text-xs text-rose-300"
+            >
+                {{ quickLauncherHotkeyErrorText }}
+            </p>
         </div>
 
         <div

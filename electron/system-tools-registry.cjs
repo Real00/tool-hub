@@ -4,6 +4,24 @@ function getWindowsDir() {
   return process.env.WINDIR || "C:\\Windows";
 }
 
+function makeSvgDataUrl(svg) {
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function createRecorderIconDataUrl(mode) {
+  const accent = mode === "window" ? "#38bdf8" : "#22d3ee";
+  const label = mode === "window" ? "APP" : "REC";
+  return makeSvgDataUrl(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="16" fill="#0f172a"/>
+      <rect x="10" y="14" width="44" height="28" rx="6" fill="#111827" stroke="${accent}" stroke-width="3"/>
+      <circle cx="22" cy="50" r="6" fill="#ef4444"/>
+      <rect x="32" y="46" width="18" height="8" rx="4" fill="${accent}"/>
+      <text x="32" y="34" fill="${accent}" font-size="10" font-family="Segoe UI, Arial, sans-serif" text-anchor="middle">${label}</text>
+    </svg>
+  `);
+}
+
 function resolveSystem32Path(fileName) {
   return path.join(getWindowsDir(), "System32", fileName);
 }
@@ -29,6 +47,28 @@ function getBuiltinSystemTools() {
   const explorerExe = path.join(getWindowsDir(), "explorer.exe");
 
   return [
+    {
+      id: "builtin:screen-recorder",
+      name: "屏幕录像",
+      source: "System Tool",
+      launchType: "internal",
+      category: "recorder",
+      description: "使用 ffmpeg 录制指定屏幕。",
+      iconDataUrl: createRecorderIconDataUrl("screen"),
+      keywords: ["screen recorder", "record screen", "录屏", "屏幕录制", "录像", "luping"],
+      matchBoost: 320,
+    },
+    {
+      id: "builtin:window-recorder",
+      name: "应用录像",
+      source: "System Tool",
+      launchType: "internal",
+      category: "recorder",
+      description: "使用 ffmpeg 录制指定应用窗口。",
+      iconDataUrl: createRecorderIconDataUrl("window"),
+      keywords: ["window recorder", "app recorder", "应用录制", "窗口录制", "录像", "yylx"],
+      matchBoost: 300,
+    },
     {
       id: "builtin:control-panel",
       name: "控制面板",

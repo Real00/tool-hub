@@ -16,3 +16,13 @@ export interface ConfigRestoreResult {
   restoredPaths: string[];
   restartRecommended: boolean;
 }
+
+export type QuickLauncherHotkeyError = "occupied" | "invalid" | "unknown" | null;
+
+export interface QuickLauncherHotkeyState {
+  configuredAccelerator: string;
+  activeAccelerator: string | null;
+  registered: boolean;
+  lastError: QuickLauncherHotkeyError;
+  updatedAt: number;
+}

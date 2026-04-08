@@ -3,6 +3,7 @@ import GeneratorPage from "../pages/GeneratorPage.vue";
 import QuickLauncherPage from "../pages/QuickLauncherPage.vue";
 import RuntimePage from "../pages/RuntimePage.vue";
 import SettingsPage from "../pages/SettingsPage.vue";
+import SystemRecorderPage from "../pages/SystemRecorderPage.vue";
 import WorkspacePage from "../pages/WorkspacePage.vue";
 
 const router = createRouter({
@@ -36,6 +37,11 @@ const router = createRouter({
       path: "/quick-launcher",
       name: "quick-launcher",
       component: QuickLauncherPage,
+    },
+    {
+      path: "/system-recorder",
+      name: "system-recorder",
+      component: SystemRecorderPage,
     },
     {
       path: "/:pathMatch(.*)*",

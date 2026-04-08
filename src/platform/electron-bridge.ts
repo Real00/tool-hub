@@ -16,7 +16,14 @@ import type {
   InstalledApp,
   RemoveAppOptions,
 } from "../types/app";
-import type { SystemAppEntry } from "../types/system-app";
+import type {
+  StartSystemRecorderInput,
+  SystemAppEntry,
+  SystemRecorderStartResult,
+  SystemRecorderSource,
+  SystemRecorderSourceKind,
+  SystemRecorderState,
+} from "../types/system-app";
 import type { UpdateState } from "../types/update";
 import type {
   ClaudeCliDetectionResult,
@@ -117,6 +124,22 @@ interface ToolHubApi {
   searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
   getSystemAppsByIds: (appIds: string[]) => Promise<SystemAppEntry[]>;
   openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
+  getSystemRecorderState: () => Promise<SystemRecorderState>;
+  listSystemRecorderSources: (mode: SystemRecorderSourceKind) => Promise<SystemRecorderSource[]>;
+  prepareSystemRecorderPreview: (input: {
+    mode: SystemRecorderSourceKind;
+    sourceId: string;
+  }) => Promise<boolean>;
+  startSystemRecorder: (input: StartSystemRecorderInput) => Promise<SystemRecorderStartResult>;
+  appendSystemRecorderChunk: (sessionId: string, chunk: Uint8Array) => Promise<void>;
+  finishSystemRecorder: (sessionId: string) => Promise<SystemRecorderState>;
+  abortSystemRecorder: (sessionId: string, errorMessage?: string) => Promise<SystemRecorderState>;
+  pickSystemRecorderFfmpegPath: () => Promise<{
+    canceled: boolean;
+    filePath: string;
+    state: SystemRecorderState;
+  }>;
+  setSystemRecorderFfmpegPath: (filePath: string) => Promise<SystemRecorderState>;
   closeQuickLauncherWindow: () => Promise<boolean>;
   getQuickLauncherHotkeyState: () => Promise<QuickLauncherHotkeyState>;
   saveQuickLauncherHotkey: (accelerator: string) => Promise<QuickLauncherHotkeyState>;
@@ -379,6 +402,59 @@ export function getSystemAppsByIds(appIds: string[]): Promise<SystemAppEntry[]> 
 
 export function openSystemApp(appId: string, launchPayload?: string): Promise<boolean> {
   return getApi().openSystemApp(appId, launchPayload);
+}
+
+export function getSystemRecorderState(): Promise<SystemRecorderState> {
+  return getApi().getSystemRecorderState();
+}
+
+export function listSystemRecorderSources(
+  mode: SystemRecorderSourceKind,
+): Promise<SystemRecorderSource[]> {
+  return getApi().listSystemRecorderSources(mode);
+}
+
+export function prepareSystemRecorderPreview(input: {
+  mode: SystemRecorderSourceKind;
+  sourceId: string;
+}): Promise<boolean> {
+  return getApi().prepareSystemRecorderPreview(input);
+}
+
+export function startSystemRecorder(
+  input: StartSystemRecorderInput,
+): Promise<SystemRecorderStartResult> {
+  return getApi().startSystemRecorder(input);
+}
+
+export function appendSystemRecorderChunk(
+  sessionId: string,
+  chunk: Uint8Array,
+): Promise<void> {
+  return getApi().appendSystemRecorderChunk(sessionId, chunk);
+}
+
+export function finishSystemRecorder(sessionId: string): Promise<SystemRecorderState> {
+  return getApi().finishSystemRecorder(sessionId);
+}
+
+export function abortSystemRecorder(
+  sessionId: string,
+  errorMessage = "",
+): Promise<SystemRecorderState> {
+  return getApi().abortSystemRecorder(sessionId, errorMessage);
+}
+
+export function pickSystemRecorderFfmpegPath(): Promise<{
+  canceled: boolean;
+  filePath: string;
+  state: SystemRecorderState;
+}> {
+  return getApi().pickSystemRecorderFfmpegPath();
+}
+
+export function setSystemRecorderFfmpegPath(filePath: string): Promise<SystemRecorderState> {
+  return getApi().setSystemRecorderFfmpegPath(filePath);
 }
 
 export function closeQuickLauncherWindow(): Promise<boolean> {

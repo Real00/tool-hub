@@ -19,11 +19,11 @@ const quickLauncherOpen = ref(false);
 const contextDispatchRequest = ref<ContextDispatchRequest | null>(null);
 let unsubscribeQuickLauncherRequest: (() => void) | null = null;
 let unsubscribeContextDispatchRequest: (() => void) | null = null;
-
 const isSettingsRoute = computed(() => route.name === "settings");
 const isGeneratorRoute = computed(() => route.name === "generator");
 const isRuntimeRoute = computed(() => route.name === "runtime");
 const isQuickLauncherRoute = computed(() => route.name === "quick-launcher");
+const isSystemRecorderRoute = computed(() => route.name === "system-recorder");
 
 function handleTabSelect(tabId: string) {
     activeTab.value = tabId;
@@ -101,7 +101,7 @@ onUnmounted(() => {
 
 <template>
     <div
-        v-if="isQuickLauncherRoute"
+        v-if="isQuickLauncherRoute || isSystemRecorderRoute"
         class="min-h-screen bg-slate-950 text-slate-100"
     >
         <RouterView />

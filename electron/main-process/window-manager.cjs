@@ -28,6 +28,8 @@ function createWindowManager(options = {}) {
 
   const QUICK_LAUNCHER_SIZE_COMPACT = "compact";
   const QUICK_LAUNCHER_SIZE_EXPANDED = "expanded";
+  const DEFAULT_QUICK_LAUNCHER_ACCELERATOR = "Alt+Space";
+  const SYSTEM_RECORDER_PARTITION = "persist:tool-hub-system-recorder";
 
   const ASSETS_DIR_CANDIDATES = [
     path.join(process.resourcesPath, "assets"),
@@ -43,6 +45,7 @@ function createWindowManager(options = {}) {
 
   let mainWindow = null;
   let quickLauncherWindow = null;
+  let systemRecorderWindow = null;
   let quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
   let quickLauncherSizeState = {
     mode: QUICK_LAUNCHER_SIZE_COMPACT,
@@ -50,16 +53,34 @@ function createWindowManager(options = {}) {
     showEmptyState: false,
     showPayloadHint: false,
   };
+  let quickLauncherGlobalShortcut = null;
+  let quickLauncherConfiguredAccelerator = DEFAULT_QUICK_LAUNCHER_ACCELERATOR;
+  let quickLauncherActiveAccelerator = null;
+  let quickLauncherRegistered = false;
+  let quickLauncherLastError = null;
+  let quickLauncherHotkeyUpdatedAt = Date.now();
   let tray = null;
   let appIcon = null;
   let isQuitting = false;
   let isClosePromptVisible = false;
   let flushContextDispatch = () => {};
+  let systemRecorderLifecycle = {
+    onWindowUnavailable: () => {},
+  };
 
   // Context dispatch is owned by another module; this callback avoids a direct dependency.
   function setContextDispatchFlusher(callback) {
     flushContextDispatch =
       typeof callback === "function" ? callback : () => {};
+  }
+
+  function setSystemRecorderLifecycle(lifecycle) {
+    systemRecorderLifecycle = {
+      onWindowUnavailable:
+        typeof lifecycle?.onWindowUnavailable === "function"
+          ? lifecycle.onWindowUnavailable
+          : () => {},
+    };
   }
 
   function resolveRendererEntryUrl(hashPath = "/workspace") {
@@ -538,6 +559,104 @@ function createWindowManager(options = {}) {
     return win;
   }
 
+  function closeSystemRecorderWindow() {
+    if (!systemRecorderWindow || systemRecorderWindow.isDestroyed()) {
+      systemRecorderWindow = null;
+      return;
+    }
+    const win = systemRecorderWindow;
+    systemRecorderWindow = null;
+    win.close();
+  }
+
+  function createSystemRecorderWindow(systemAppId) {
+    if (systemRecorderWindow && !systemRecorderWindow.isDestroyed()) {
+      return systemRecorderWindow;
+    }
+
+    const normalizedSystemAppId = String(systemAppId ?? "").trim();
+    const routePath = normalizedSystemAppId
+      ? `/system-recorder?systemApp=${encodeURIComponent(normalizedSystemAppId)}`
+      : "/system-recorder";
+    const win = new BrowserWindow({
+      width: 1160,
+      height: 840,
+      minWidth: 960,
+      minHeight: 720,
+      show: false,
+      backgroundColor: "#020617",
+      icon: getAppIcon(),
+      title: `${appName} - System Recorder`,
+      webPreferences: {
+        preload: path.join(electronRootDir, "preload-bridge.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        partition: SYSTEM_RECORDER_PARTITION,
+      },
+    });
+
+    systemRecorderWindow = win;
+    stripWindowMenu(win);
+    attachWindowKeyboardShortcuts(win);
+
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      void shell.openExternal(url);
+      return { action: "deny" };
+    });
+
+    win.on("closed", () => {
+      if (systemRecorderWindow === win) {
+        systemRecorderWindow = null;
+      }
+      systemRecorderLifecycle.onWindowUnavailable("Recorder window closed.");
+    });
+
+    win.webContents.on("render-process-gone", (_event, details) => {
+      systemRecorderLifecycle.onWindowUnavailable(
+        `Recorder window renderer exited: ${details?.reason || "unknown"}.`,
+      );
+    });
+
+    void win.loadURL(resolveRendererEntryUrl(routePath)).catch((error) => {
+      console.error("Failed to load system recorder window:", error);
+      closeSystemRecorderWindow();
+    });
+
+    win.once("ready-to-show", () => {
+      if (!win.isDestroyed()) {
+        win.show();
+      }
+    });
+
+    return win;
+  }
+
+  function showSystemRecorderWindow(systemAppId) {
+    const hadExistingWindow =
+      !!systemRecorderWindow && !systemRecorderWindow.isDestroyed();
+    const normalizedSystemAppId = String(systemAppId ?? "").trim();
+    const routePath = normalizedSystemAppId
+      ? `/system-recorder?systemApp=${encodeURIComponent(normalizedSystemAppId)}`
+      : "/system-recorder";
+    const win = createSystemRecorderWindow(normalizedSystemAppId);
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+
+    const targetUrl = resolveRendererEntryUrl(routePath);
+    if (hadExistingWindow && win.webContents.getURL() !== targetUrl) {
+      void win.loadURL(targetUrl).catch((error) => {
+        console.error("Failed to update system recorder window:", error);
+      });
+    }
+
+    if (win.isMinimized()) {
+      win.restore();
+    }
+    win.show();
+    win.focus();
+  }
+
   function emitQuickLauncherOpenSignal(win) {
     if (!win || win.isDestroyed()) {
       return;
@@ -590,16 +709,137 @@ function createWindowManager(options = {}) {
     showQuickLauncherWindow();
   }
 
-  function registerQuickLauncherHotkey(globalShortcut) {
-    const accelerator = "Alt+Space";
-    const success = globalShortcut.register(accelerator, () => {
-      emitQuickLauncherOpen();
-    });
-    if (!success) {
+  function normalizeQuickLauncherAccelerator(input) {
+    return String(input ?? "").trim();
+  }
+
+  function isInvalidAcceleratorError(error) {
+    const message =
+      error instanceof Error ? error.message : String(error ?? "");
+    return /invalid accelerator|accelerator/i.test(message);
+  }
+
+  function getQuickLauncherHotkeyState() {
+    return {
+      configuredAccelerator: quickLauncherConfiguredAccelerator,
+      activeAccelerator: quickLauncherActiveAccelerator,
+      registered: quickLauncherRegistered,
+      lastError: quickLauncherLastError,
+      updatedAt: quickLauncherHotkeyUpdatedAt,
+    };
+  }
+
+  function setQuickLauncherHotkey(acceleratorInput) {
+    const normalized = normalizeQuickLauncherAccelerator(acceleratorInput);
+    if (!normalized) {
+      throw new Error("Quick launcher hotkey cannot be empty.");
+    }
+    quickLauncherConfiguredAccelerator = normalized;
+    quickLauncherHotkeyUpdatedAt = Date.now();
+    return getQuickLauncherHotkeyState();
+  }
+
+  function unregisterActiveQuickLauncherHotkey() {
+    if (!quickLauncherGlobalShortcut || !quickLauncherActiveAccelerator) {
+      quickLauncherActiveAccelerator = null;
+      quickLauncherRegistered = false;
+      return;
+    }
+    try {
+      quickLauncherGlobalShortcut.unregister(quickLauncherActiveAccelerator);
+    } catch {
+      // Ignore unregister failures to keep retry flow resilient.
+    }
+    quickLauncherActiveAccelerator = null;
+    quickLauncherRegistered = false;
+  }
+
+  function applyQuickLauncherHotkey(acceleratorInput) {
+    if (typeof acceleratorInput === "string") {
+      const normalizedInput = normalizeQuickLauncherAccelerator(acceleratorInput);
+      if (!normalizedInput) {
+        quickLauncherLastError = "invalid";
+        quickLauncherHotkeyUpdatedAt = Date.now();
+        return getQuickLauncherHotkeyState();
+      }
+      quickLauncherConfiguredAccelerator = normalizedInput;
+    }
+
+    const accelerator = normalizeQuickLauncherAccelerator(
+      quickLauncherConfiguredAccelerator,
+    );
+    if (!accelerator) {
+      quickLauncherLastError = "invalid";
+      quickLauncherHotkeyUpdatedAt = Date.now();
+      return getQuickLauncherHotkeyState();
+    }
+    quickLauncherConfiguredAccelerator = accelerator;
+
+    if (!quickLauncherGlobalShortcut) {
+      quickLauncherLastError = "unknown";
+      quickLauncherHotkeyUpdatedAt = Date.now();
+      return getQuickLauncherHotkeyState();
+    }
+
+    if (quickLauncherRegistered && quickLauncherActiveAccelerator === accelerator) {
+      quickLauncherLastError = null;
+      quickLauncherHotkeyUpdatedAt = Date.now();
+      return getQuickLauncherHotkeyState();
+    }
+
+    const previousActiveAccelerator = quickLauncherActiveAccelerator;
+    const previousRegistered = quickLauncherRegistered;
+    try {
+      const success = quickLauncherGlobalShortcut.register(accelerator, () => {
+        emitQuickLauncherOpen();
+      });
+      if (success) {
+        if (previousActiveAccelerator && previousActiveAccelerator !== accelerator) {
+          try {
+            quickLauncherGlobalShortcut.unregister(previousActiveAccelerator);
+          } catch {
+            // Ignore unregister failures; the new shortcut is already active.
+          }
+        }
+        quickLauncherRegistered = true;
+        quickLauncherActiveAccelerator = accelerator;
+        quickLauncherLastError = null;
+      } else {
+        quickLauncherRegistered = previousRegistered;
+        quickLauncherActiveAccelerator = previousActiveAccelerator;
+        quickLauncherLastError = "occupied";
+        console.warn(
+          `[shortcut] Failed to register global shortcut (occupied): ${accelerator}`,
+        );
+      }
+    } catch (error) {
+      quickLauncherRegistered = previousRegistered;
+      quickLauncherActiveAccelerator = previousActiveAccelerator;
+      quickLauncherLastError = isInvalidAcceleratorError(error)
+        ? "invalid"
+        : "unknown";
       console.warn(
         `[shortcut] Failed to register global shortcut: ${accelerator}`,
+        error,
       );
     }
+    quickLauncherHotkeyUpdatedAt = Date.now();
+    return getQuickLauncherHotkeyState();
+  }
+
+  function retryQuickLauncherHotkey() {
+    return applyQuickLauncherHotkey();
+  }
+
+  function registerQuickLauncherHotkey(globalShortcut, acceleratorInput) {
+    quickLauncherGlobalShortcut = globalShortcut ?? null;
+    if (typeof acceleratorInput === "string") {
+      const normalizedInput = normalizeQuickLauncherAccelerator(acceleratorInput);
+      if (normalizedInput) {
+        quickLauncherConfiguredAccelerator = normalizedInput;
+      }
+    }
+    return applyQuickLauncherHotkey();
   }
 
   function setQuickLauncherWindowSize(mode) {
@@ -620,19 +860,27 @@ function createWindowManager(options = {}) {
 
   return {
     setContextDispatchFlusher,
+    setSystemRecorderLifecycle,
     createMainWindow,
     showMainWindow,
     hideMainWindow,
     createTray,
     updateTrayMenu,
     registerQuickLauncherHotkey,
+    setQuickLauncherHotkey,
+    applyQuickLauncherHotkey,
+    retryQuickLauncherHotkey,
+    getQuickLauncherHotkeyState,
     prewarmQuickLauncherWindow,
     closeQuickLauncherWindow,
     destroyQuickLauncherWindow,
+    closeSystemRecorderWindow,
+    showSystemRecorderWindow,
     setQuickLauncherWindowSize,
     stripWindowMenu,
     attachWindowKeyboardShortcuts,
     getAppIcon,
+    getSystemRecorderPartition: () => SYSTEM_RECORDER_PARTITION,
     markQuitting,
     isQuitting: isAppQuitting,
     getMainWindow,

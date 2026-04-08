@@ -12,6 +12,7 @@ const DEFAULT_TABS = [
   { id: "security", label: "安全" },
 ];
 const DEFAULT_VERIFY_COMMAND = "node --check src/index.js";
+const DEFAULT_QUICK_LAUNCHER_HOTKEY = "Alt+Space";
 
 let dbPromise = null;
 
@@ -209,11 +210,52 @@ async function saveGeneratorSettings(input) {
   };
 }
 
+function normalizeQuickLauncherHotkey(input) {
+  return String(input ?? "").trim();
+}
+
+async function getQuickLauncherHotkey() {
+  const db = await getDb();
+  const value = await getGeneratorSettingValue(
+    db,
+    "quick_launcher_hotkey",
+    DEFAULT_QUICK_LAUNCHER_HOTKEY,
+  );
+  const normalized = normalizeQuickLauncherHotkey(value);
+  return normalized || DEFAULT_QUICK_LAUNCHER_HOTKEY;
+}
+
+async function saveQuickLauncherHotkey(input) {
+  const hotkey = normalizeQuickLauncherHotkey(input);
+  if (!hotkey) {
+    throw new Error("Quick launcher hotkey cannot be empty.");
+  }
+  const db = await getDb();
+  await setGeneratorSettingValue(db, "quick_launcher_hotkey", hotkey);
+  return hotkey;
+}
+
+async function getRecorderFfmpegPath() {
+  const db = await getDb();
+  return getGeneratorSettingValue(db, "system_recorder_ffmpeg_path", "");
+}
+
+async function saveRecorderFfmpegPath(input) {
+  const filePath = String(input ?? "").trim();
+  const db = await getDb();
+  await setGeneratorSettingValue(db, "system_recorder_ffmpeg_path", filePath);
+  return filePath;
+}
+
 module.exports = {
   closeSettingsStore,
   getGeneratorSettings,
+  getQuickLauncherHotkey,
+  getRecorderFfmpegPath,
   getSettingsTabs,
   initializeSettingsStore,
+  saveRecorderFfmpegPath,
+  saveQuickLauncherHotkey,
   saveSettingsTabs,
   saveGeneratorSettings,
   resolveDatabasePath,

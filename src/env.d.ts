@@ -29,7 +29,14 @@ import type {
   QuickLauncherHotkeyState,
   TabDefinition,
 } from "./types/settings";
-import type { SystemAppEntry } from "./types/system-app";
+import type {
+  StartSystemRecorderInput,
+  SystemAppEntry,
+  SystemRecorderStartResult,
+  SystemRecorderSource,
+  SystemRecorderSourceKind,
+  SystemRecorderState,
+} from "./types/system-app";
 import type { UpdateState } from "./types/update";
 
 declare global {
@@ -120,6 +127,22 @@ declare global {
     searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
     getSystemAppsByIds: (appIds: string[]) => Promise<SystemAppEntry[]>;
     openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
+    getSystemRecorderState: () => Promise<SystemRecorderState>;
+    listSystemRecorderSources: (mode: SystemRecorderSourceKind) => Promise<SystemRecorderSource[]>;
+    prepareSystemRecorderPreview: (input: {
+      mode: SystemRecorderSourceKind;
+      sourceId: string;
+    }) => Promise<boolean>;
+    startSystemRecorder: (input: StartSystemRecorderInput) => Promise<SystemRecorderStartResult>;
+    appendSystemRecorderChunk: (sessionId: string, chunk: Uint8Array) => Promise<void>;
+    finishSystemRecorder: (sessionId: string) => Promise<SystemRecorderState>;
+    abortSystemRecorder: (sessionId: string, errorMessage?: string) => Promise<SystemRecorderState>;
+    pickSystemRecorderFfmpegPath: () => Promise<{
+      canceled: boolean;
+      filePath: string;
+      state: SystemRecorderState;
+    }>;
+    setSystemRecorderFfmpegPath: (filePath: string) => Promise<SystemRecorderState>;
     closeQuickLauncherWindow: () => Promise<boolean>;
     getQuickLauncherHotkeyState: () => Promise<QuickLauncherHotkeyState>;
     saveQuickLauncherHotkey: (accelerator: string) => Promise<QuickLauncherHotkeyState>;
