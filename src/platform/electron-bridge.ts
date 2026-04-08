@@ -12,6 +12,7 @@ import type {
   AppLogEvent,
   AppRunRecord,
   AppsRootInfo,
+  ClipboardPathContext,
   ContextDispatchRequest,
   InstalledApp,
   RemoveAppOptions,
@@ -145,6 +146,9 @@ interface ToolHubApi {
   saveQuickLauncherHotkey: (accelerator: string) => Promise<QuickLauncherHotkeyState>;
   applyQuickLauncherHotkey: (accelerator?: string) => Promise<QuickLauncherHotkeyState>;
   retryQuickLauncherHotkey: () => Promise<QuickLauncherHotkeyState>;
+  getQuickLauncherClipboardPathContext: () => Promise<ClipboardPathContext | null>;
+  openClipboardPathFile: (path: string) => Promise<boolean>;
+  openClipboardPathLocation: (path: string) => Promise<boolean>;
   setQuickLauncherWindowSize: (payload: QuickLauncherWindowSizePayload) => Promise<boolean>;
   getUpdateState: () => Promise<UpdateState>;
   checkForUpdates: () => Promise<UpdateState>;
@@ -479,6 +483,18 @@ export function applyQuickLauncherHotkey(
 
 export function retryQuickLauncherHotkey(): Promise<QuickLauncherHotkeyState> {
   return getApi().retryQuickLauncherHotkey();
+}
+
+export function getQuickLauncherClipboardPathContext(): Promise<ClipboardPathContext | null> {
+  return getApi().getQuickLauncherClipboardPathContext();
+}
+
+export function openClipboardPathFile(path: string): Promise<boolean> {
+  return getApi().openClipboardPathFile(path);
+}
+
+export function openClipboardPathLocation(path: string): Promise<boolean> {
+  return getApi().openClipboardPathLocation(path);
 }
 
 export function setQuickLauncherWindowSize(

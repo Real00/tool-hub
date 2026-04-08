@@ -7,6 +7,7 @@ import type {
   AppLogEvent,
   AppRunRecord,
   AppsRootInfo,
+  ClipboardPathContext,
   ContextDispatchRequest,
   InstalledApp,
   RemoveAppOptions,
@@ -148,6 +149,9 @@ declare global {
     saveQuickLauncherHotkey: (accelerator: string) => Promise<QuickLauncherHotkeyState>;
     applyQuickLauncherHotkey: (accelerator?: string) => Promise<QuickLauncherHotkeyState>;
     retryQuickLauncherHotkey: () => Promise<QuickLauncherHotkeyState>;
+    getQuickLauncherClipboardPathContext: () => Promise<ClipboardPathContext | null>;
+    openClipboardPathFile: (path: string) => Promise<boolean>;
+    openClipboardPathLocation: (path: string) => Promise<boolean>;
     setQuickLauncherWindowSize: (payload: {
       mode: "compact" | "expanded";
       resultCount?: number;

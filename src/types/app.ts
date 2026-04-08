@@ -49,6 +49,12 @@ export interface ContextDispatchRequest {
   targets: DispatchTarget[];
 }
 
+export interface ClipboardPathContext {
+  rawText: string;
+  path: string;
+  kind: "file" | "directory";
+}
+
 export interface AppCapabilityDispatchPayload {
   appId: string;
   capabilityId: string;

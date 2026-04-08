@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
+  getQuickLauncherClipboardPathContext,
   getSystemAppsByIds,
   isElectronRuntime,
+  openClipboardPathFile,
+  openClipboardPathLocation,
   openAppWindow,
   openSystemApp,
   searchSystemApps,
@@ -18,20 +21,22 @@ import {
   toggleLauncherFavorite,
   upsertLauncherHistoryIcons,
 } from "../composables/launcher-history";
-import type { InstalledApp } from "../types/app";
+import type { ClipboardPathContext, InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
 
 interface LauncherResultItem {
   id: string;
   name: string;
   source: string;
-  kind: "system" | "installed";
+  kind: "system" | "installed" | "clipboard-path";
   targetId: string;
   score: number;
   acceptsLaunchPayload: boolean;
-  historyKey: string;
+  historyKey: string | null;
   favorite: boolean;
   iconDataUrl?: string;
+  description?: string;
+  clipboardAction?: "open-file" | "open-path";
 }
 
 interface QuickLauncherSizePayload {
@@ -69,23 +74,37 @@ const message = ref("");
 const activeIndex = ref(-1);
 const launchPayloadTarget = ref<LauncherResultItem | null>(null);
 const launcherHistoryByKey = ref(readLauncherHistoryMap());
+const clipboardPathContext = ref<ClipboardPathContext | null>(null);
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let searchToken = 0;
+let clipboardPathToken = 0;
 let searchQueryBeforePayload = "";
 let unsubscribeLauncherHistory: (() => void) | null = null;
 const recentIconBackfillInFlight = new Set<string>();
 const recentIconBackfillAttemptAt = new Map<string, number>();
 let disposed = false;
 
+const clipboardPathHint = computed(() => {
+  if (launchPayloadTarget.value || query.value.trim()) {
+    return "";
+  }
+  return clipboardPathContext.value?.path ?? "";
+});
+
 const placeholder = computed(() => {
   if (launchPayloadTarget.value) {
     return `Type launch payload for ${launchPayloadTarget.value.name}...`;
+  }
+  if (clipboardPathHint.value) {
+    return "";
   }
   return canSearchApps
     ? "Search system and installed apps..."
     : "App search available in Electron";
 });
+
+const showFavoriteTip = computed(() => results.value.some((item) => !!item.historyKey));
 
 const windowSizePayload = computed<QuickLauncherSizePayload>(() => {
   const hasQuery = query.value.trim().length > 0;
@@ -163,6 +182,61 @@ function refreshLauncherHistory() {
   launcherHistoryByKey.value = readLauncherHistoryMap();
 }
 
+function buildClipboardPathResults(): LauncherResultItem[] {
+  const context = clipboardPathContext.value;
+  if (!context || query.value.trim() || launchPayloadTarget.value) {
+    return [];
+  }
+
+  const targetKindLabel = context.kind === "directory" ? "Directory" : "File";
+  if (context.kind === "directory") {
+    return [
+      {
+        id: `clipboard-path:open-path:${context.path}`,
+        kind: "clipboard-path",
+        targetId: context.path,
+        name: "Open Path",
+        description: context.path,
+        source: "Clipboard / Open directory",
+        score: 4000,
+        acceptsLaunchPayload: false,
+        historyKey: null,
+        favorite: false,
+        clipboardAction: "open-path",
+      },
+    ];
+  }
+
+  return [
+    {
+      id: `clipboard-path:open-file:${context.path}`,
+      kind: "clipboard-path",
+      targetId: context.path,
+      name: "Open File",
+      description: context.path,
+      source: `Clipboard / ${targetKindLabel}`,
+      score: 4000,
+      acceptsLaunchPayload: false,
+      historyKey: null,
+      favorite: false,
+      clipboardAction: "open-file",
+    },
+    {
+      id: `clipboard-path:open-path:${context.path}`,
+      kind: "clipboard-path",
+      targetId: context.path,
+      name: "Open Path",
+      description: context.path,
+      source: "Clipboard / Reveal in Explorer",
+      score: 3990,
+      acceptsLaunchPayload: false,
+      historyKey: null,
+      favorite: false,
+      clipboardAction: "open-path",
+    },
+  ];
+}
+
 function buildRecentResults(): LauncherResultItem[] {
   const installedById = new Map(props.installedApps.map((app) => [app.id, app]));
   const recent = getRecentLauncherHistory(SEARCH_LIMIT);
@@ -205,6 +279,15 @@ function buildRecentResults(): LauncherResultItem[] {
   }
 
   return output.slice(0, SEARCH_LIMIT);
+}
+
+function buildDefaultResults(): LauncherResultItem[] {
+  const clipboardResults = buildClipboardPathResults();
+  const remaining = Math.max(0, SEARCH_LIMIT - clipboardResults.length);
+  if (remaining === 0) {
+    return clipboardResults.slice(0, SEARCH_LIMIT);
+  }
+  return [...clipboardResults, ...buildRecentResults().slice(0, remaining)];
 }
 
 async function runRecentSystemIconBackfill(systemIds: string[]) {
@@ -352,12 +435,12 @@ function backfillSearchSystemIcons(items: LauncherResultItem[], token: number) {
   }
 }
 
-function showRecentResults() {
-  const recent = buildRecentResults();
-  results.value = recent;
-  activeIndex.value = recent.length > 0 ? 0 : -1;
+function showDefaultResults() {
+  const nextResults = buildDefaultResults();
+  results.value = nextResults;
+  activeIndex.value = nextResults.length > 0 ? 0 : -1;
   status.value = "idle";
-  backfillRecentSystemIcons(recent);
+  backfillRecentSystemIcons(nextResults);
 }
 
 function clearSearch() {
@@ -468,7 +551,7 @@ async function runSearch() {
   const trimmedQuery = query.value.trim();
   const token = ++searchToken;
   if (!trimmedQuery) {
-    showRecentResults();
+    showDefaultResults();
     return;
   }
 
@@ -569,6 +652,17 @@ async function openResult(index: number) {
 
 async function executeLaunchTarget(target: LauncherResultItem, launchPayload?: string) {
   try {
+    if (target.kind === "clipboard-path") {
+      if (target.clipboardAction === "open-path") {
+        await openClipboardPathLocation(target.targetId);
+      } else {
+        await openClipboardPathFile(target.targetId);
+      }
+      clearSearch();
+      closeModal();
+      return;
+    }
+
     if (target.kind === "system") {
       await openSystemApp(target.targetId, launchPayload);
     } else {
@@ -597,13 +691,16 @@ async function executeLaunchTarget(target: LauncherResultItem, launchPayload?: s
 
 function handleResultContextMenu(target: LauncherResultItem, event: MouseEvent) {
   event.preventDefault();
+  if (!target.historyKey) {
+    return;
+  }
   const nextFavorite = toggleLauncherFavorite(target.historyKey);
   refreshLauncherHistory();
   message.value = nextFavorite
     ? `Favorited: ${target.name}`
     : `Unfavorited: ${target.name}`;
   if (!query.value.trim()) {
-    showRecentResults();
+    showDefaultResults();
   } else {
     scheduleSearch();
   }
@@ -626,6 +723,35 @@ function cancelLaunchPayloadTarget() {
   launchPayloadTarget.value = null;
   searchQueryBeforePayload = "";
   query.value = restoreQuery;
+}
+
+async function refreshClipboardPathContext() {
+  if (!canSearchApps || disposed) {
+    clipboardPathContext.value = null;
+    return;
+  }
+
+  const token = ++clipboardPathToken;
+  try {
+    const nextContext = await getQuickLauncherClipboardPathContext();
+    if (disposed || token !== clipboardPathToken) {
+      return;
+    }
+    clipboardPathContext.value = nextContext;
+  } catch {
+    if (token !== clipboardPathToken) {
+      return;
+    }
+    clipboardPathContext.value = null;
+  }
+}
+
+async function refreshClipboardPathContextAndShowDefaults() {
+  await refreshClipboardPathContext();
+  if (!props.open || launchPayloadTarget.value || query.value.trim()) {
+    return;
+  }
+  showDefaultResults();
 }
 
 function handleInputKeydown(event: KeyboardEvent) {
@@ -699,7 +825,9 @@ watch(query, () => {
 
   if (!query.value.trim()) {
     searchToken += 1;
-    showRecentResults();
+    clipboardPathContext.value = null;
+    showDefaultResults();
+    void refreshClipboardPathContextAndShowDefaults();
     return;
   }
 
@@ -719,7 +847,7 @@ watch(
       return;
     }
     if (!query.value.trim()) {
-      showRecentResults();
+      showDefaultResults();
       return;
     }
     scheduleSearch();
@@ -737,7 +865,7 @@ watch(
     inputRef.value?.focus();
     inputRef.value?.select();
     if (!query.value.trim() && !launchPayloadTarget.value) {
-      showRecentResults();
+      await refreshClipboardPathContextAndShowDefaults();
     }
   },
 );
@@ -769,14 +897,14 @@ onMounted(async () => {
   unsubscribeLauncherHistory = subscribeLauncherHistoryUpdates(() => {
     refreshLauncherHistory();
     if (props.open && !launchPayloadTarget.value && !query.value.trim()) {
-      showRecentResults();
+      showDefaultResults();
     }
   });
   if (props.open) {
     await nextTick();
     inputRef.value?.focus();
     inputRef.value?.select();
-    showRecentResults();
+    await refreshClipboardPathContextAndShowDefaults();
   }
 });
 </script>
@@ -792,15 +920,23 @@ onMounted(async () => {
       :class="panelClass"
     >
       <div :class="inputContainerClass">
-        <input
-          ref="inputRef"
-          v-model="query"
-          type="text"
-          class="w-full rounded-lg bg-slate-900/50 px-3 py-2.5 text-sm text-slate-100 outline-none ring-2 ring-transparent transition focus:bg-slate-900/70 focus:ring-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-70"
-          :placeholder="placeholder"
-          :disabled="!canSearchApps"
-          @keydown="handleInputKeydown"
-        />
+        <div class="relative">
+          <div
+            v-if="clipboardPathHint"
+            class="pointer-events-none absolute inset-0 flex items-center overflow-hidden rounded-lg px-3 py-2.5 text-sm text-slate-500/70"
+          >
+            <span class="truncate">{{ clipboardPathHint }}</span>
+          </div>
+          <input
+            ref="inputRef"
+            v-model="query"
+            type="text"
+            class="relative z-10 w-full rounded-lg bg-slate-900/50 px-3 py-2.5 text-sm text-slate-100 outline-none ring-2 ring-transparent transition focus:bg-slate-900/70 focus:ring-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-70"
+            :placeholder="placeholder"
+            :disabled="!canSearchApps"
+            @keydown="handleInputKeydown"
+          />
+        </div>
         <p
           v-if="launchPayloadTarget"
           class="mt-1.5 text-xs text-cyan-300"
@@ -846,13 +982,24 @@ onMounted(async () => {
               />
               <span v-else>{{ app.name.slice(0, 1) }}</span>
             </span>
-            <span class="truncate">{{ app.name }}</span>
+            <span class="min-w-0">
+              <span class="block truncate">{{ app.name }}</span>
+              <span
+                v-if="app.description"
+                class="block truncate text-xs text-slate-500"
+              >
+                {{ app.description }}
+              </span>
+            </span>
           </span>
           <span class="shrink-0 text-xs text-slate-400">
             {{ app.favorite ? "★ " : "" }}{{ app.source }}
           </span>
         </button>
-        <p class="sticky bottom-0 border-t border-slate-800 bg-slate-950/95 px-4 py-2 text-xs text-slate-500">
+        <p
+          v-if="showFavoriteTip"
+          class="sticky bottom-0 border-t border-slate-800 bg-slate-950/95 px-4 py-2 text-xs text-slate-500"
+        >
           Tip: right-click a result to toggle favorite.
         </p>
       </div>

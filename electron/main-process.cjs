@@ -1,6 +1,7 @@
 const {
   app,
   BrowserWindow,
+  clipboard,
   Menu,
   Notification,
   Tray,
@@ -250,6 +251,73 @@ function ensureWindowsContextMenuRegistered() {
 
 function normalizeQuickLauncherHotkey(input) {
   return String(input ?? "").trim();
+}
+
+function stripWrappingQuotes(input) {
+  const value = String(input ?? "").trim();
+  if (value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) {
+    return value.slice(1, -1).trim();
+  }
+  return value;
+}
+
+function resolveLocalPathContext(input) {
+  const rawText = String(input ?? "").trim();
+  if (!rawText || /[\r\n]/.test(rawText)) {
+    return null;
+  }
+
+  const candidate = stripWrappingQuotes(rawText);
+  if (!candidate || !path.isAbsolute(candidate)) {
+    return null;
+  }
+
+  const normalizedPath = path.normalize(candidate);
+  if (!fs.existsSync(normalizedPath)) {
+    return null;
+  }
+
+  const stat = fs.statSync(normalizedPath);
+  return {
+    rawText,
+    path: normalizedPath,
+    kind: stat.isDirectory() ? "directory" : "file",
+  };
+}
+
+function getQuickLauncherClipboardPathContext() {
+  return resolveLocalPathContext(clipboard.readText());
+}
+
+function requireExistingLocalPathContext(input) {
+  const context = resolveLocalPathContext(input);
+  if (!context) {
+    throw new Error("Path not found or not a supported absolute local path.");
+  }
+  return context;
+}
+
+async function openClipboardPathFile(input) {
+  const context = requireExistingLocalPathContext(input);
+  const errorMessage = await shell.openPath(context.path);
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+  return true;
+}
+
+async function openClipboardPathLocation(input) {
+  const context = requireExistingLocalPathContext(input);
+  if (context.kind === "file") {
+    shell.showItemInFolder(context.path);
+    return true;
+  }
+
+  const errorMessage = await shell.openPath(context.path);
+  if (errorMessage) {
+    throw new Error(errorMessage);
+  }
+  return true;
 }
 
 async function loadQuickLauncherHotkeyFromSettings() {
@@ -769,6 +837,18 @@ ipcMain.handle("quick-launcher:apply-hotkey", async (_event, accelerator) => {
 
 ipcMain.handle("quick-launcher:retry-hotkey", async () => {
   return windowManager.retryQuickLauncherHotkey();
+});
+
+ipcMain.handle("quick-launcher:get-clipboard-path-context", async () => {
+  return getQuickLauncherClipboardPathContext();
+});
+
+ipcMain.handle("quick-launcher:open-clipboard-path-file", async (_event, targetPath) => {
+  return openClipboardPathFile(targetPath);
+});
+
+ipcMain.handle("quick-launcher:open-clipboard-path-location", async (_event, targetPath) => {
+  return openClipboardPathLocation(targetPath);
 });
 
 ipcMain.handle("quick-launcher:set-size", async (_event, mode) => {

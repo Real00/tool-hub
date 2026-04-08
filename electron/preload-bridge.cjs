@@ -216,6 +216,15 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   retryQuickLauncherHotkey() {
     return ipcRenderer.invoke("quick-launcher:retry-hotkey");
   },
+  getQuickLauncherClipboardPathContext() {
+    return ipcRenderer.invoke("quick-launcher:get-clipboard-path-context");
+  },
+  openClipboardPathFile(targetPath) {
+    return ipcRenderer.invoke("quick-launcher:open-clipboard-path-file", targetPath);
+  },
+  openClipboardPathLocation(targetPath) {
+    return ipcRenderer.invoke("quick-launcher:open-clipboard-path-location", targetPath);
+  },
   setQuickLauncherWindowSize(payload) {
     return ipcRenderer.invoke("quick-launcher:set-size", payload);
   },
