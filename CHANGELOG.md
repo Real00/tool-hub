@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.0] - 2026-04-10
 
 ### Added
 - 新增内置 `开发者工具` 系统应用与独立窗口，支持从 Settings 的 System Apps 面板和 quick launcher 直接打开。
@@ -12,6 +12,7 @@
 - 开发者工具面板布局调整为更紧凑的双区域结构，JSON 输入移到左侧小卡片，时间戳结果与当前时间改为结构化列表展示。
 - JSON 结果面板升级为支持展开/折叠的树视图，并增加 `Expand All` / `Collapse All` 控制。
 - quick launcher 现在支持通过关键词直达开发者工具模式，例如 `随机`、`json`、`md5`。
+- quick launcher 搜索性能优化，缩短系统应用和已安装应用的检索延迟。
 
 ## [0.4.0] - 2026-04-10
 

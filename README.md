@@ -4,7 +4,7 @@ A desktop toolbox application built with Vue 3 + Tailwind CSS.
 
 ## Changelog
 
-- See `CHANGELOG.md` for release notes (current version: `0.4.0`).
+- See `CHANGELOG.md` for release notes (current version: `0.5.0`).
 
 ## Start
 
