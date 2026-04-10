@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- 新增内置 `开发者工具` 系统应用与独立窗口，支持从 Settings 的 System Apps 面板和 quick launcher 直接打开。
+- 新增开发者工具的转换能力：`JSON Format`、`MD5 Hash`、`Random Generate`、URL 编解码、Unicode 编解码、Base64 编解码与时间戳转换。
+- 新增 quick launcher 剪切板开发者动作，能在高置信度命中 JSON、URL、Unicode、Base64、时间戳时直接打开开发者工具并切到对应面板。
+- 新增 Settings 页面内置 System Apps 面板，可浏览并直接打开内置系统应用。
+
+### Changed
+- 开发者工具面板布局调整为更紧凑的双区域结构，JSON 输入移到左侧小卡片，时间戳结果与当前时间改为结构化列表展示。
+- JSON 结果面板升级为支持展开/折叠的树视图，并增加 `Expand All` / `Collapse All` 控制。
+- quick launcher 现在支持通过关键词直达开发者工具模式，例如 `随机`、`json`、`md5`。
+
 ## [0.4.0] - 2026-04-10
 
 ### Added

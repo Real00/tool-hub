@@ -1512,6 +1512,7 @@ async function listSystemApps() {
   await ensureIndexReady();
   const allowedSystemAppIds = new Set([
     "builtin:ai-chat",
+    "builtin:developer-tools",
     "builtin:screen-recorder",
   ]);
   const builtinEntries = indexState.items.filter(

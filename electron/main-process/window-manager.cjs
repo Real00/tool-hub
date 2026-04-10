@@ -31,6 +31,7 @@ function createWindowManager(options = {}) {
   const DEFAULT_QUICK_LAUNCHER_ACCELERATOR = "Alt+Space";
   const SYSTEM_RECORDER_PARTITION = "persist:tool-hub-system-recorder";
   const AI_CHAT_LAUNCH_CHANNEL = "ai-chat:launch";
+  const DEVELOPER_TOOLS_LAUNCH_CHANNEL = "developer-tools:launch";
 
   const ASSETS_DIR_CANDIDATES = [
     path.join(process.resourcesPath, "assets"),
@@ -48,6 +49,7 @@ function createWindowManager(options = {}) {
   let quickLauncherWindow = null;
   let systemRecorderWindow = null;
   let aiChatWindow = null;
+  let developerToolsWindow = null;
   let quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
   let quickLauncherSizeState = {
     mode: QUICK_LAUNCHER_SIZE_COMPACT,
@@ -70,6 +72,12 @@ function createWindowManager(options = {}) {
     onWindowUnavailable: () => {},
   };
   let aiChatLaunchState = {
+    payload: null,
+    source: "manual",
+    requestId: "",
+    updatedAt: 0,
+  };
+  let developerToolsLaunchState = {
     payload: null,
     source: "manual",
     requestId: "",
@@ -709,6 +717,64 @@ function createWindowManager(options = {}) {
     win.close();
   }
 
+  function createDeveloperToolsLaunchState(payloadInput, sourceInput = "manual") {
+    const payload = String(payloadInput ?? "").trim();
+    return {
+      payload: payload || null,
+      source: sourceInput === "quick-launcher" ? "quick-launcher" : "manual",
+      requestId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      updatedAt: Date.now(),
+    };
+  }
+
+  function getDeveloperToolsLaunchState() {
+    return {
+      payload: developerToolsLaunchState.payload,
+      source: developerToolsLaunchState.source,
+      requestId: developerToolsLaunchState.requestId,
+      updatedAt: developerToolsLaunchState.updatedAt,
+    };
+  }
+
+  function emitDeveloperToolsLaunchState(win) {
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+    win.webContents.send(
+      DEVELOPER_TOOLS_LAUNCH_CHANNEL,
+      getDeveloperToolsLaunchState(),
+    );
+  }
+
+  function setDeveloperToolsLaunchState(
+    payloadInput,
+    sourceInput = "manual",
+    emitUpdate = false,
+  ) {
+    developerToolsLaunchState = createDeveloperToolsLaunchState(
+      payloadInput,
+      sourceInput,
+    );
+    if (
+      emitUpdate &&
+      developerToolsWindow &&
+      !developerToolsWindow.isDestroyed()
+    ) {
+      emitDeveloperToolsLaunchState(developerToolsWindow);
+    }
+    return getDeveloperToolsLaunchState();
+  }
+
+  function closeDeveloperToolsWindow() {
+    if (!developerToolsWindow || developerToolsWindow.isDestroyed()) {
+      developerToolsWindow = null;
+      return;
+    }
+    const win = developerToolsWindow;
+    developerToolsWindow = null;
+    win.close();
+  }
+
   function createAiChatWindow() {
     if (aiChatWindow && !aiChatWindow.isDestroyed()) {
       return aiChatWindow;
@@ -770,6 +836,78 @@ function createWindowManager(options = {}) {
     }
 
     setAiChatLaunchState(payloadInput, sourceInput, !win.webContents.isLoadingMainFrame());
+    if (win.isMinimized()) {
+      win.restore();
+    }
+    win.show();
+    win.focus();
+  }
+
+  function createDeveloperToolsWindow() {
+    if (developerToolsWindow && !developerToolsWindow.isDestroyed()) {
+      return developerToolsWindow;
+    }
+
+    const win = new BrowserWindow({
+      width: 1160,
+      height: 820,
+      minWidth: 920,
+      minHeight: 640,
+      show: false,
+      backgroundColor: "#020617",
+      icon: getAppIcon(),
+      title: `${appName} - Developer Tools`,
+      webPreferences: {
+        preload: path.join(electronRootDir, "preload-bridge.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+
+    developerToolsWindow = win;
+    stripWindowMenu(win);
+    attachWindowKeyboardShortcuts(win);
+
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      void shell.openExternal(url);
+      return { action: "deny" };
+    });
+
+    win.on("closed", () => {
+      if (developerToolsWindow === win) {
+        developerToolsWindow = null;
+      }
+    });
+
+    win.webContents.on("did-finish-load", () => {
+      emitDeveloperToolsLaunchState(win);
+    });
+
+    void win.loadURL(resolveRendererEntryUrl("/developer-tools")).catch((error) => {
+      console.error("Failed to load developer tools window:", error);
+      closeDeveloperToolsWindow();
+    });
+
+    win.once("ready-to-show", () => {
+      if (!win.isDestroyed()) {
+        win.show();
+      }
+    });
+
+    return win;
+  }
+
+  function showDeveloperToolsWindow(payloadInput, sourceInput = "manual") {
+    const win = createDeveloperToolsWindow();
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+
+    setDeveloperToolsLaunchState(
+      payloadInput,
+      sourceInput,
+      !win.webContents.isLoadingMainFrame(),
+    );
     if (win.isMinimized()) {
       win.restore();
     }
@@ -995,10 +1133,13 @@ function createWindowManager(options = {}) {
     closeQuickLauncherWindow,
     destroyQuickLauncherWindow,
     closeAiChatWindow,
+    closeDeveloperToolsWindow,
     closeSystemRecorderWindow,
     getAiChatLaunchState,
+    getDeveloperToolsLaunchState,
     showSystemRecorderWindow,
     showAiChatWindow,
+    showDeveloperToolsWindow,
     setQuickLauncherWindowSize,
     stripWindowMenu,
     attachWindowKeyboardShortcuts,

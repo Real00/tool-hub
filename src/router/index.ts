@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import GeneratorPage from "../pages/GeneratorPage.vue";
+import DeveloperToolsPage from "../pages/DeveloperToolsPage.vue";
 import QuickLauncherPage from "../pages/QuickLauncherPage.vue";
 import RuntimePage from "../pages/RuntimePage.vue";
 import SettingsPage from "../pages/SettingsPage.vue";
@@ -38,6 +39,11 @@ const router = createRouter({
       path: "/quick-launcher",
       name: "quick-launcher",
       component: QuickLauncherPage,
+    },
+    {
+      path: "/developer-tools",
+      name: "developer-tools",
+      component: DeveloperToolsPage,
     },
     {
       path: "/system-recorder",

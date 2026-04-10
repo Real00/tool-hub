@@ -23,6 +23,7 @@ const isSettingsRoute = computed(() => route.name === "settings");
 const isGeneratorRoute = computed(() => route.name === "generator");
 const isRuntimeRoute = computed(() => route.name === "runtime");
 const isQuickLauncherRoute = computed(() => route.name === "quick-launcher");
+const isDeveloperToolsRoute = computed(() => route.name === "developer-tools");
 const isSystemRecorderRoute = computed(() => route.name === "system-recorder");
 const isSystemAiRoute = computed(() => route.name === "system-ai");
 
@@ -102,7 +103,7 @@ onUnmounted(() => {
 
 <template>
     <div
-        v-if="isQuickLauncherRoute || isSystemRecorderRoute || isSystemAiRoute"
+        v-if="isQuickLauncherRoute || isDeveloperToolsRoute || isSystemRecorderRoute || isSystemAiRoute"
         class="min-h-screen bg-slate-950 text-slate-100"
     >
         <RouterView />

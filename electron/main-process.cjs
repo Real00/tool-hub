@@ -21,6 +21,11 @@ const { pathToFileURL } = require("node:url");
 
 const { createAutoUpdateController } = require("./main-process/auto-update.cjs");
 const { createAiChatManager } = require("./ai-chat-manager.cjs");
+const {
+  analyzeDeveloperToolsText,
+  getQuickLauncherClipboardDeveloperToolsContext,
+  runDeveloperToolsTransform,
+} = require("./developer-tools-manager.cjs");
 const { createWindowManager } = require("./main-process/window-manager.cjs");
 const { createAppRuntimeWindowsController } = require("./main-process/app-runtime-windows.cjs");
 const { createContextDispatchController } = require("./main-process/context-dispatch.cjs");
@@ -763,6 +768,10 @@ ipcMain.handle("system-apps:search", async (_event, query, limit) => {
   return getSystemAppsManager().searchSystemApps(query, limit);
 });
 
+ipcMain.handle("system-apps:list", async () => {
+  return getSystemAppsManager().listSystemApps();
+});
+
 ipcMain.handle("system-apps:get-by-ids", async (_event, appIds) => {
   return getSystemAppsManager().getSystemAppsByIds(appIds);
 });
@@ -770,6 +779,13 @@ ipcMain.handle("system-apps:get-by-ids", async (_event, appIds) => {
 ipcMain.handle("system-apps:open", async (_event, appId, launchPayload) => {
   if (systemRecorderManager.isRecorderSystemAppId(appId)) {
     windowManager.showSystemRecorderWindow(appId);
+    return true;
+  }
+  if (appId === "builtin:developer-tools") {
+    windowManager.showDeveloperToolsWindow(
+      launchPayload,
+      launchPayload ? "quick-launcher" : "manual",
+    );
     return true;
   }
   if (appId === "builtin:ai-chat") {
@@ -852,6 +868,10 @@ ipcMain.handle("quick-launcher:get-clipboard-path-context", async () => {
   return getQuickLauncherClipboardPathContext();
 });
 
+ipcMain.handle("quick-launcher:get-clipboard-developer-tools-context", async () => {
+  return getQuickLauncherClipboardDeveloperToolsContext(clipboard.readText());
+});
+
 ipcMain.handle("quick-launcher:open-clipboard-path-file", async (_event, targetPath) => {
   return openClipboardPathFile(targetPath);
 });
@@ -907,6 +927,18 @@ ipcMain.handle("ai-chat:cancel-stream", async (_event, requestId) => {
 
 ipcMain.handle("ai-chat:get-launch-state", async () => {
   return windowManager.getAiChatLaunchState();
+});
+
+ipcMain.handle("developer-tools:analyze-text", async (_event, text) => {
+  return analyzeDeveloperToolsText(text);
+});
+
+ipcMain.handle("developer-tools:run-transform", async (_event, text, transformId) => {
+  return runDeveloperToolsTransform(text, transformId);
+});
+
+ipcMain.handle("developer-tools:get-launch-state", async () => {
+  return windowManager.getDeveloperToolsLaunchState();
 });
 
 ipcMain.on("ai-chat:stream-subscribe", (event) => {
@@ -1060,6 +1092,7 @@ if (!hasSingleInstanceLock) {
     windowManager.markQuitting();
     windowManager.destroyQuickLauncherWindow();
     windowManager.closeAiChatWindow();
+    windowManager.closeDeveloperToolsWindow();
     windowManager.closeSystemRecorderWindow();
     autoUpdateController.cancelStartupCheck();
     contextDispatchController.dispose();

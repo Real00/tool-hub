@@ -37,6 +37,13 @@ import type {
   SendAiChatMessageResult,
 } from "../types/ai-chat";
 import type {
+  DeveloperToolsAnalyzeResult,
+  DeveloperToolsLaunchState,
+  DeveloperToolsTransformId,
+  DeveloperToolsTransformResult,
+  QuickLauncherClipboardDeveloperToolsContext,
+} from "../types/developer-tools";
+import type {
   ClaudeCliDetectionResult,
   GeneratorProjectAgentsUpdateResult,
   GeneratorInstallResult,
@@ -132,6 +139,7 @@ interface ToolHubApi {
   ) => Promise<AppCapabilityDispatchResult>;
   pickInstallDirectory: () => Promise<string | null>;
   refreshSystemAppsIndex: () => Promise<number>;
+  listSystemApps: () => Promise<SystemAppEntry[]>;
   searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
   getSystemAppsByIds: (appIds: string[]) => Promise<SystemAppEntry[]>;
   openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
@@ -157,6 +165,7 @@ interface ToolHubApi {
   applyQuickLauncherHotkey: (accelerator?: string) => Promise<QuickLauncherHotkeyState>;
   retryQuickLauncherHotkey: () => Promise<QuickLauncherHotkeyState>;
   getQuickLauncherClipboardPathContext: () => Promise<ClipboardPathContext | null>;
+  getQuickLauncherClipboardDeveloperToolsContext: () => Promise<QuickLauncherClipboardDeveloperToolsContext | null>;
   openClipboardPathFile: (path: string) => Promise<boolean>;
   openClipboardPathLocation: (path: string) => Promise<boolean>;
   setQuickLauncherWindowSize: (payload: QuickLauncherWindowSizePayload) => Promise<boolean>;
@@ -171,8 +180,17 @@ interface ToolHubApi {
   beginAiChatStream: (requestId: string) => Promise<boolean>;
   cancelAiChatStream: (requestId: string) => Promise<boolean>;
   getAiChatLaunchState: () => Promise<AiChatLaunchState>;
+  analyzeDeveloperToolsText: (text: string) => Promise<DeveloperToolsAnalyzeResult>;
+  runDeveloperToolsTransform: (
+    text: string,
+    transformId: DeveloperToolsTransformId,
+  ) => Promise<DeveloperToolsTransformResult>;
+  getDeveloperToolsLaunchState: () => Promise<DeveloperToolsLaunchState>;
   subscribeAiChatStream: (callback: (event: AiChatStreamEvent) => void) => () => void;
   subscribeAiChatLaunch: (callback: (state: AiChatLaunchState) => void) => () => void;
+  subscribeDeveloperToolsLaunch: (
+    callback: (state: DeveloperToolsLaunchState) => void,
+  ) => () => void;
   getUpdateState: () => Promise<UpdateState>;
   checkForUpdates: () => Promise<UpdateState>;
   downloadUpdate: () => Promise<UpdateState>;
@@ -419,6 +437,10 @@ export function refreshSystemAppsIndex(): Promise<number> {
   return getApi().refreshSystemAppsIndex();
 }
 
+export function listSystemApps(): Promise<SystemAppEntry[]> {
+  return getApi().listSystemApps();
+}
+
 export function searchSystemApps(query: string, limit = 12): Promise<SystemAppEntry[]> {
   return getApi().searchSystemApps(query, limit);
 }
@@ -512,6 +534,10 @@ export function getQuickLauncherClipboardPathContext(): Promise<ClipboardPathCon
   return getApi().getQuickLauncherClipboardPathContext();
 }
 
+export function getQuickLauncherClipboardDeveloperToolsContext(): Promise<QuickLauncherClipboardDeveloperToolsContext | null> {
+  return getApi().getQuickLauncherClipboardDeveloperToolsContext();
+}
+
 export function openClipboardPathFile(path: string): Promise<boolean> {
   return getApi().openClipboardPathFile(path);
 }
@@ -574,6 +600,23 @@ export function getAiChatLaunchState(): Promise<AiChatLaunchState> {
   return getApi().getAiChatLaunchState();
 }
 
+export function analyzeDeveloperToolsText(
+  text: string,
+): Promise<DeveloperToolsAnalyzeResult> {
+  return getApi().analyzeDeveloperToolsText(text);
+}
+
+export function runDeveloperToolsTransform(
+  text: string,
+  transformId: DeveloperToolsTransformId,
+): Promise<DeveloperToolsTransformResult> {
+  return getApi().runDeveloperToolsTransform(text, transformId);
+}
+
+export function getDeveloperToolsLaunchState(): Promise<DeveloperToolsLaunchState> {
+  return getApi().getDeveloperToolsLaunchState();
+}
+
 export function subscribeAiChatStream(
   callback: (event: AiChatStreamEvent) => void,
 ): () => void {
@@ -584,6 +627,12 @@ export function subscribeAiChatLaunch(
   callback: (state: AiChatLaunchState) => void,
 ): () => void {
   return getApi().subscribeAiChatLaunch(callback);
+}
+
+export function subscribeDeveloperToolsLaunch(
+  callback: (state: DeveloperToolsLaunchState) => void,
+): () => void {
+  return getApi().subscribeDeveloperToolsLaunch(callback);
 }
 
 export function getUpdateState(): Promise<UpdateState> {

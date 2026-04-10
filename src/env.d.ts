@@ -49,6 +49,13 @@ import type {
   SendAiChatMessageInput,
   SendAiChatMessageResult,
 } from "./types/ai-chat";
+import type {
+  DeveloperToolsAnalyzeResult,
+  DeveloperToolsLaunchState,
+  DeveloperToolsTransformId,
+  DeveloperToolsTransformResult,
+  QuickLauncherClipboardDeveloperToolsContext,
+} from "./types/developer-tools";
 
 declare global {
   interface ToolHubApi {
@@ -135,6 +142,7 @@ declare global {
     ) => Promise<AppCapabilityDispatchResult>;
     pickInstallDirectory: () => Promise<string | null>;
     refreshSystemAppsIndex: () => Promise<number>;
+    listSystemApps: () => Promise<SystemAppEntry[]>;
     searchSystemApps: (query: string, limit?: number) => Promise<SystemAppEntry[]>;
     getSystemAppsByIds: (appIds: string[]) => Promise<SystemAppEntry[]>;
     openSystemApp: (appId: string, launchPayload?: string) => Promise<boolean>;
@@ -160,6 +168,7 @@ declare global {
     applyQuickLauncherHotkey: (accelerator?: string) => Promise<QuickLauncherHotkeyState>;
     retryQuickLauncherHotkey: () => Promise<QuickLauncherHotkeyState>;
     getQuickLauncherClipboardPathContext: () => Promise<ClipboardPathContext | null>;
+    getQuickLauncherClipboardDeveloperToolsContext: () => Promise<QuickLauncherClipboardDeveloperToolsContext | null>;
     openClipboardPathFile: (path: string) => Promise<boolean>;
     openClipboardPathLocation: (path: string) => Promise<boolean>;
     getAiChatSettings: () => Promise<AiChatSettings>;
@@ -173,8 +182,17 @@ declare global {
     beginAiChatStream: (requestId: string) => Promise<boolean>;
     cancelAiChatStream: (requestId: string) => Promise<boolean>;
     getAiChatLaunchState: () => Promise<AiChatLaunchState>;
+    analyzeDeveloperToolsText: (text: string) => Promise<DeveloperToolsAnalyzeResult>;
+    runDeveloperToolsTransform: (
+      text: string,
+      transformId: DeveloperToolsTransformId,
+    ) => Promise<DeveloperToolsTransformResult>;
+    getDeveloperToolsLaunchState: () => Promise<DeveloperToolsLaunchState>;
     subscribeAiChatStream: (callback: (event: AiChatStreamEvent) => void) => () => void;
     subscribeAiChatLaunch: (callback: (state: AiChatLaunchState) => void) => () => void;
+    subscribeDeveloperToolsLaunch: (
+      callback: (state: DeveloperToolsLaunchState) => void,
+    ) => () => void;
     setQuickLauncherWindowSize: (payload: {
       mode: "compact" | "expanded";
       resultCount?: number;

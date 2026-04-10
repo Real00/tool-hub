@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
+  getQuickLauncherClipboardDeveloperToolsContext,
   getQuickLauncherClipboardPathContext,
   getSystemAppsByIds,
   isElectronRuntime,
@@ -23,13 +24,17 @@ import {
 } from "../composables/launcher-history";
 import { searchInstalledLauncherApps } from "../composables/launcher-search";
 import type { ClipboardPathContext, InstalledApp } from "../types/app";
+import type {
+  DeveloperToolsTransformId,
+  QuickLauncherClipboardDeveloperToolsContext,
+} from "../types/developer-tools";
 import type { SystemAppEntry } from "../types/system-app";
 
 interface LauncherResultItem {
   id: string;
   name: string;
   source: string;
-  kind: "system" | "installed" | "clipboard-path";
+  kind: "system" | "installed" | "clipboard-path" | "clipboard-devtools";
   targetId: string;
   score: number;
   acceptsLaunchPayload: boolean;
@@ -38,6 +43,8 @@ interface LauncherResultItem {
   iconDataUrl?: string;
   description?: string;
   clipboardAction?: "open-file" | "open-path";
+  developerToolsPayload?: string;
+  developerToolsTransform?: DeveloperToolsTransformId;
 }
 
 interface QuickLauncherSizePayload {
@@ -78,10 +85,12 @@ const activeIndex = ref(-1);
 const launchPayloadTarget = ref<LauncherResultItem | null>(null);
 const launcherHistoryByKey = ref(readLauncherHistoryMap());
 const clipboardPathContext = ref<ClipboardPathContext | null>(null);
+const clipboardDeveloperToolsContext = ref<QuickLauncherClipboardDeveloperToolsContext | null>(null);
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let searchToken = 0;
 let clipboardPathToken = 0;
+let clipboardDeveloperToolsToken = 0;
 let searchQueryBeforePayload = "";
 let unsubscribeLauncherHistory: (() => void) | null = null;
 const recentIconBackfillInFlight = new Set<string>();
@@ -240,6 +249,94 @@ function buildClipboardPathResults(): LauncherResultItem[] {
   ];
 }
 
+function buildDeveloperToolsLaunchPayload(
+  inputText: string,
+  suggestedTransform: DeveloperToolsTransformId,
+): string {
+  return JSON.stringify({
+    source: "quick-launcher",
+    inputText,
+    suggestedTransform,
+  });
+}
+
+function resolveDeveloperToolsLaunchPayloadFromQuery(
+  target: LauncherResultItem,
+  queryText: string,
+): string | undefined {
+  if (target.kind !== "system" || target.targetId !== "builtin:developer-tools") {
+    return undefined;
+  }
+  const normalizedQuery = queryText.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return undefined;
+  }
+  if (
+    normalizedQuery === "md5" ||
+    normalizedQuery === "md5 hash" ||
+    normalizedQuery === "hash" ||
+    normalizedQuery === "摘要"
+  ) {
+    return JSON.stringify({
+      source: "quick-launcher",
+      inputText: "",
+      suggestedTransform: "md5-hash",
+    });
+  }
+  if (
+    normalizedQuery === "随机" ||
+    normalizedQuery === "随机字符" ||
+    normalizedQuery === "随机字符串" ||
+    normalizedQuery === "random" ||
+    normalizedQuery === "random string"
+  ) {
+    return JSON.stringify({
+      source: "quick-launcher",
+      inputText: "",
+      suggestedTransform: "random-generate",
+    });
+  }
+  if (
+    normalizedQuery === "json" ||
+    normalizedQuery === "json格式化" ||
+    normalizedQuery === "格式化json" ||
+    normalizedQuery === "json format" ||
+    normalizedQuery === "json formatter"
+  ) {
+    return JSON.stringify({
+      source: "quick-launcher",
+      inputText: "",
+      suggestedTransform: "json-format",
+    });
+  }
+  return undefined;
+}
+
+function buildClipboardDeveloperToolsResults(): LauncherResultItem[] {
+  const context = clipboardDeveloperToolsContext.value;
+  if (!context || query.value.trim() || launchPayloadTarget.value) {
+    return [];
+  }
+
+  return context.actions.map((action, index) => ({
+    id: `clipboard-devtools:${action.id}:${index}`,
+    kind: "clipboard-devtools",
+    targetId: "builtin:developer-tools",
+    name: action.label,
+    description: action.description,
+    source: "Clipboard / Developer Tools",
+    score: 3950 - index,
+    acceptsLaunchPayload: false,
+    historyKey: null,
+    favorite: false,
+    developerToolsPayload: buildDeveloperToolsLaunchPayload(
+      context.rawText,
+      action.suggestedTransform,
+    ),
+    developerToolsTransform: action.suggestedTransform,
+  }));
+}
+
 function buildRecentResults(): LauncherResultItem[] {
   const installedById = new Map(props.installedApps.map((app) => [app.id, app]));
   const recent = getRecentLauncherHistory(SEARCH_LIMIT);
@@ -286,11 +383,19 @@ function buildRecentResults(): LauncherResultItem[] {
 
 function buildDefaultResults(): LauncherResultItem[] {
   const clipboardResults = buildClipboardPathResults();
-  const remaining = Math.max(0, SEARCH_LIMIT - clipboardResults.length);
+  const developerToolsResults = buildClipboardDeveloperToolsResults();
+  const remaining = Math.max(
+    0,
+    SEARCH_LIMIT - clipboardResults.length - developerToolsResults.length,
+  );
   if (remaining === 0) {
-    return clipboardResults.slice(0, SEARCH_LIMIT);
+    return [...clipboardResults, ...developerToolsResults].slice(0, SEARCH_LIMIT);
   }
-  return [...clipboardResults, ...buildRecentResults().slice(0, remaining)];
+  return [
+    ...clipboardResults,
+    ...developerToolsResults,
+    ...buildRecentResults().slice(0, remaining),
+  ];
 }
 
 async function runRecentSystemIconBackfill(systemIds: string[]) {
@@ -582,7 +687,10 @@ async function openResult(index: number) {
     return;
   }
 
-  await executeLaunchTarget(target, undefined);
+  await executeLaunchTarget(
+    target,
+    resolveDeveloperToolsLaunchPayloadFromQuery(target, query.value),
+  );
 }
 
 async function executeLaunchTarget(target: LauncherResultItem, launchPayload?: string) {
@@ -593,6 +701,13 @@ async function executeLaunchTarget(target: LauncherResultItem, launchPayload?: s
       } else {
         await openClipboardPathFile(target.targetId);
       }
+      clearSearch();
+      closeModal();
+      return;
+    }
+
+    if (target.kind === "clipboard-devtools") {
+      await openSystemApp(target.targetId, target.developerToolsPayload);
       clearSearch();
       closeModal();
       return;
@@ -681,8 +796,32 @@ async function refreshClipboardPathContext() {
   }
 }
 
-async function refreshClipboardPathContextAndShowDefaults() {
-  await refreshClipboardPathContext();
+async function refreshClipboardDeveloperToolsContext() {
+  if (!canSearchApps || disposed) {
+    clipboardDeveloperToolsContext.value = null;
+    return;
+  }
+
+  const token = ++clipboardDeveloperToolsToken;
+  try {
+    const nextContext = await getQuickLauncherClipboardDeveloperToolsContext();
+    if (disposed || token !== clipboardDeveloperToolsToken) {
+      return;
+    }
+    clipboardDeveloperToolsContext.value = nextContext;
+  } catch {
+    if (token !== clipboardDeveloperToolsToken) {
+      return;
+    }
+    clipboardDeveloperToolsContext.value = null;
+  }
+}
+
+async function refreshClipboardContextsAndShowDefaults() {
+  await Promise.all([
+    refreshClipboardPathContext(),
+    refreshClipboardDeveloperToolsContext(),
+  ]);
   if (!props.open || launchPayloadTarget.value || query.value.trim()) {
     return;
   }
@@ -761,8 +900,9 @@ watch(query, () => {
   if (!query.value.trim()) {
     searchToken += 1;
     clipboardPathContext.value = null;
+    clipboardDeveloperToolsContext.value = null;
     showDefaultResults();
-    void refreshClipboardPathContextAndShowDefaults();
+    void refreshClipboardContextsAndShowDefaults();
     return;
   }
 
@@ -800,7 +940,7 @@ watch(
     inputRef.value?.focus();
     inputRef.value?.select();
     if (!query.value.trim() && !launchPayloadTarget.value) {
-      await refreshClipboardPathContextAndShowDefaults();
+      await refreshClipboardContextsAndShowDefaults();
     }
   },
 );
@@ -839,7 +979,7 @@ onMounted(async () => {
     await nextTick();
     inputRef.value?.focus();
     inputRef.value?.select();
-    await refreshClipboardPathContextAndShowDefaults();
+    await refreshClipboardContextsAndShowDefaults();
   }
 });
 </script>

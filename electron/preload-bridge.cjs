@@ -165,6 +165,9 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   refreshSystemAppsIndex() {
     return ipcRenderer.invoke("system-apps:refresh");
   },
+  listSystemApps() {
+    return ipcRenderer.invoke("system-apps:list");
+  },
   searchSystemApps(query, limit) {
     return ipcRenderer.invoke("system-apps:search", query, limit);
   },
@@ -219,6 +222,9 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   getQuickLauncherClipboardPathContext() {
     return ipcRenderer.invoke("quick-launcher:get-clipboard-path-context");
   },
+  getQuickLauncherClipboardDeveloperToolsContext() {
+    return ipcRenderer.invoke("quick-launcher:get-clipboard-developer-tools-context");
+  },
   openClipboardPathFile(targetPath) {
     return ipcRenderer.invoke("quick-launcher:open-clipboard-path-file", targetPath);
   },
@@ -261,6 +267,15 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   getAiChatLaunchState() {
     return ipcRenderer.invoke("ai-chat:get-launch-state");
   },
+  analyzeDeveloperToolsText(text) {
+    return ipcRenderer.invoke("developer-tools:analyze-text", text);
+  },
+  runDeveloperToolsTransform(text, transformId) {
+    return ipcRenderer.invoke("developer-tools:run-transform", text, transformId);
+  },
+  getDeveloperToolsLaunchState() {
+    return ipcRenderer.invoke("developer-tools:get-launch-state");
+  },
   subscribeAiChatStream(callback) {
     if (typeof callback !== "function") {
       return () => {};
@@ -285,6 +300,18 @@ contextBridge.exposeInMainWorld("toolHubApi", {
     ipcRenderer.on("ai-chat:launch", listener);
     return () => {
       ipcRenderer.removeListener("ai-chat:launch", listener);
+    };
+  },
+  subscribeDeveloperToolsLaunch(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const listener = (_event, payload) => {
+      callback(payload);
+    };
+    ipcRenderer.on("developer-tools:launch", listener);
+    return () => {
+      ipcRenderer.removeListener("developer-tools:launch", listener);
     };
   },
   getUpdateState() {
