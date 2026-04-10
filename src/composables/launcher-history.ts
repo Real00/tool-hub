@@ -52,6 +52,45 @@ function sortHistory(items: LauncherHistoryItem[]): LauncherHistoryItem[] {
   });
 }
 
+function normalizeHistorySource(kind: LauncherHistoryKind, input: unknown): string {
+  const fallback = kind === "system" ? "System" : "Installed";
+  const value = String(input ?? "").trim();
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value.replace(/^(recent\s*\/\s*)+/i, "").trim();
+  return normalized || fallback;
+}
+
+function dedupeHistory(items: LauncherHistoryItem[]): LauncherHistoryItem[] {
+  const mergedByKey = new Map<string, LauncherHistoryItem>();
+
+  items.forEach((item) => {
+    const existing = mergedByKey.get(item.key);
+    if (!existing) {
+      mergedByKey.set(item.key, item);
+      return;
+    }
+
+    const nextLastLaunchedAt = Math.max(existing.lastLaunchedAt, item.lastLaunchedAt);
+    const preferCurrent = item.lastLaunchedAt >= existing.lastLaunchedAt;
+    mergedByKey.set(item.key, {
+      ...existing,
+      ...(preferCurrent ? item : {}),
+      key: existing.key,
+      kind: existing.kind,
+      targetId: existing.targetId,
+      favorite: existing.favorite || item.favorite,
+      iconDataUrl: item.iconDataUrl || existing.iconDataUrl,
+      launchCount: Math.max(existing.launchCount, item.launchCount),
+      lastLaunchedAt: nextLastLaunchedAt,
+    });
+  });
+
+  return Array.from(mergedByKey.values());
+}
+
 function normalizeHistoryItem(input: unknown): LauncherHistoryItem | null {
   if (!input || typeof input !== "object") {
     return null;
@@ -65,7 +104,7 @@ function normalizeHistoryItem(input: unknown): LauncherHistoryItem | null {
     return null;
   }
 
-  const source = String(candidate.source ?? "").trim() || (kind === "system" ? "System" : "Installed");
+  const source = normalizeHistorySource(kind, candidate.source);
   const key = makeLauncherHistoryKey(kind, targetId);
   const launchCount = Number(candidate.launchCount ?? 0);
   const lastLaunchedAt = Number(candidate.lastLaunchedAt ?? 0);
@@ -88,7 +127,7 @@ function persistHistory(items: LauncherHistoryItem[]) {
   if (!canUseStorage()) {
     return;
   }
-  const sorted = sortHistory(items).slice(0, MAX_LAUNCHER_HISTORY_ITEMS);
+  const sorted = sortHistory(dedupeHistory(items)).slice(0, MAX_LAUNCHER_HISTORY_ITEMS);
   try {
     window.localStorage.setItem(
       LAUNCHER_HISTORY_STORAGE_KEY,
@@ -123,7 +162,7 @@ export function readLauncherHistory(): LauncherHistoryItem[] {
     const normalized = parsed
       .map((item) => normalizeHistoryItem(item))
       .filter((item): item is LauncherHistoryItem => !!item);
-    return sortHistory(normalized).slice(0, MAX_LAUNCHER_HISTORY_ITEMS);
+    return sortHistory(dedupeHistory(normalized)).slice(0, MAX_LAUNCHER_HISTORY_ITEMS);
   } catch {
     return [];
   }
@@ -155,7 +194,7 @@ export function recordLauncherLaunch(input: RecordLaunchInput) {
     kind,
     targetId,
     name,
-    source: String(input.source ?? "").trim() || (kind === "system" ? "System" : "Installed"),
+    source: normalizeHistorySource(kind, input.source),
     acceptsLaunchPayload: input.acceptsLaunchPayload === true,
     favorite: existing?.favorite === true,
     iconDataUrl: nextIconDataUrl || existing?.iconDataUrl,

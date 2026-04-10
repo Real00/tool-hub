@@ -30,6 +30,7 @@ function createWindowManager(options = {}) {
   const QUICK_LAUNCHER_SIZE_EXPANDED = "expanded";
   const DEFAULT_QUICK_LAUNCHER_ACCELERATOR = "Alt+Space";
   const SYSTEM_RECORDER_PARTITION = "persist:tool-hub-system-recorder";
+  const AI_CHAT_LAUNCH_CHANNEL = "ai-chat:launch";
 
   const ASSETS_DIR_CANDIDATES = [
     path.join(process.resourcesPath, "assets"),
@@ -46,6 +47,7 @@ function createWindowManager(options = {}) {
   let mainWindow = null;
   let quickLauncherWindow = null;
   let systemRecorderWindow = null;
+  let aiChatWindow = null;
   let quickLauncherSizeMode = QUICK_LAUNCHER_SIZE_COMPACT;
   let quickLauncherSizeState = {
     mode: QUICK_LAUNCHER_SIZE_COMPACT,
@@ -66,6 +68,12 @@ function createWindowManager(options = {}) {
   let flushContextDispatch = () => {};
   let systemRecorderLifecycle = {
     onWindowUnavailable: () => {},
+  };
+  let aiChatLaunchState = {
+    payload: null,
+    source: "manual",
+    requestId: "",
+    updatedAt: 0,
   };
 
   // Context dispatch is owned by another module; this callback avoids a direct dependency.
@@ -657,6 +665,118 @@ function createWindowManager(options = {}) {
     win.focus();
   }
 
+  function createAiChatLaunchState(payloadInput, sourceInput = "manual") {
+    const payload = String(payloadInput ?? "").trim();
+    return {
+      payload: payload || null,
+      source: sourceInput === "quick-launcher" ? "quick-launcher" : "manual",
+      requestId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      updatedAt: Date.now(),
+    };
+  }
+
+  function getAiChatLaunchState() {
+    return {
+      payload: aiChatLaunchState.payload,
+      source: aiChatLaunchState.source,
+      requestId: aiChatLaunchState.requestId,
+      updatedAt: aiChatLaunchState.updatedAt,
+    };
+  }
+
+  function emitAiChatLaunchState(win) {
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+    win.webContents.send(AI_CHAT_LAUNCH_CHANNEL, getAiChatLaunchState());
+  }
+
+  function setAiChatLaunchState(payloadInput, sourceInput = "manual", emitUpdate = false) {
+    aiChatLaunchState = createAiChatLaunchState(payloadInput, sourceInput);
+    if (emitUpdate && aiChatWindow && !aiChatWindow.isDestroyed()) {
+      emitAiChatLaunchState(aiChatWindow);
+    }
+    return getAiChatLaunchState();
+  }
+
+  function closeAiChatWindow() {
+    if (!aiChatWindow || aiChatWindow.isDestroyed()) {
+      aiChatWindow = null;
+      return;
+    }
+    const win = aiChatWindow;
+    aiChatWindow = null;
+    win.close();
+  }
+
+  function createAiChatWindow() {
+    if (aiChatWindow && !aiChatWindow.isDestroyed()) {
+      return aiChatWindow;
+    }
+
+    const win = new BrowserWindow({
+      width: 1280,
+      height: 860,
+      minWidth: 980,
+      minHeight: 680,
+      show: false,
+      backgroundColor: "#020617",
+      icon: getAppIcon(),
+      title: `${appName} - AI`,
+      webPreferences: {
+        preload: path.join(electronRootDir, "preload-bridge.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+
+    aiChatWindow = win;
+    stripWindowMenu(win);
+    attachWindowKeyboardShortcuts(win);
+
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      void shell.openExternal(url);
+      return { action: "deny" };
+    });
+
+    win.on("closed", () => {
+      if (aiChatWindow === win) {
+        aiChatWindow = null;
+      }
+    });
+
+    win.webContents.on("did-finish-load", () => {
+      emitAiChatLaunchState(win);
+    });
+
+    void win.loadURL(resolveRendererEntryUrl("/system-ai")).catch((error) => {
+      console.error("Failed to load AI chat window:", error);
+      closeAiChatWindow();
+    });
+
+    win.once("ready-to-show", () => {
+      if (!win.isDestroyed()) {
+        win.show();
+      }
+    });
+
+    return win;
+  }
+
+  function showAiChatWindow(payloadInput, sourceInput = "manual") {
+    const win = createAiChatWindow();
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+
+    setAiChatLaunchState(payloadInput, sourceInput, !win.webContents.isLoadingMainFrame());
+    if (win.isMinimized()) {
+      win.restore();
+    }
+    win.show();
+    win.focus();
+  }
+
   function emitQuickLauncherOpenSignal(win) {
     if (!win || win.isDestroyed()) {
       return;
@@ -874,8 +994,11 @@ function createWindowManager(options = {}) {
     prewarmQuickLauncherWindow,
     closeQuickLauncherWindow,
     destroyQuickLauncherWindow,
+    closeAiChatWindow,
     closeSystemRecorderWindow,
+    getAiChatLaunchState,
     showSystemRecorderWindow,
+    showAiChatWindow,
     setQuickLauncherWindowSize,
     stripWindowMenu,
     attachWindowKeyboardShortcuts,

@@ -1,7 +1,7 @@
 {
   "name": "tool-hub",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "main": "electron/main-process.cjs",
@@ -10,7 +10,7 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "build": "pnpm typecheck && vite build",
     "preview": "vite preview",
-    "electron:dev": "concurrently -k -s first \"vite\" \"wait-on tcp:5173 && electron . http://127.0.0.1:5173\"",
+    "electron:dev": "concurrently -k -s first \"vite\" \"wait-on tcp:5273 && electron . http://127.0.0.1:5273\"",
     "electron:start": "electron .",
     "electron:start:build": "pnpm build && electron .",
     "electron:pack:win": "pnpm build && electron-builder --config electron-builder.yml --win nsis --x64 --publish never",
@@ -18,8 +18,13 @@
     "electron:dist:win:dry": "pnpm build && electron-builder --config electron-builder.yml --win nsis --x64 --publish never"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.51.0",
+    "dompurify": "^3.3.3",
     "electron-updater": "^6.3.9",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.1",
     "node-pty": "^1.0.0",
+    "openai": "^5.12.2",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
     "vue": "^3.5.13",
@@ -28,6 +33,7 @@
     "xterm-addon-fit": "^0.8.0"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
     "@vitejs/plugin-vue": "^5.2.1",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
@@ -37,8 +43,8 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
     "vite": "^6.1.0",
-    "wait-on": "^8.0.1",
-    "vue-tsc": "^2.1.10"
+    "vue-tsc": "^2.1.10",
+    "wait-on": "^8.0.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

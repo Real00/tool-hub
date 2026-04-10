@@ -228,6 +228,65 @@ contextBridge.exposeInMainWorld("toolHubApi", {
   setQuickLauncherWindowSize(payload) {
     return ipcRenderer.invoke("quick-launcher:set-size", payload);
   },
+  getAiChatSettings() {
+    return ipcRenderer.invoke("ai-chat:get-settings");
+  },
+  saveAiChatSettings(input) {
+    return ipcRenderer.invoke("ai-chat:save-settings", input);
+  },
+  listAiChatModels(input) {
+    return ipcRenderer.invoke("ai-chat:list-models", input);
+  },
+  listAiChatSessions() {
+    return ipcRenderer.invoke("ai-chat:list-sessions");
+  },
+  createAiChatSession() {
+    return ipcRenderer.invoke("ai-chat:create-session");
+  },
+  deleteAiChatSession(sessionId) {
+    return ipcRenderer.invoke("ai-chat:delete-session", sessionId);
+  },
+  getAiChatSessionMessages(sessionId) {
+    return ipcRenderer.invoke("ai-chat:get-session-messages", sessionId);
+  },
+  sendAiChatMessage(input) {
+    return ipcRenderer.invoke("ai-chat:send-message", input);
+  },
+  beginAiChatStream(requestId) {
+    return ipcRenderer.invoke("ai-chat:begin-stream", requestId);
+  },
+  cancelAiChatStream(requestId) {
+    return ipcRenderer.invoke("ai-chat:cancel-stream", requestId);
+  },
+  getAiChatLaunchState() {
+    return ipcRenderer.invoke("ai-chat:get-launch-state");
+  },
+  subscribeAiChatStream(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const listener = (_event, payload) => {
+      callback(payload);
+    };
+    ipcRenderer.on("ai-chat:stream", listener);
+    ipcRenderer.send("ai-chat:stream-subscribe");
+    return () => {
+      ipcRenderer.send("ai-chat:stream-unsubscribe");
+      ipcRenderer.removeListener("ai-chat:stream", listener);
+    };
+  },
+  subscribeAiChatLaunch(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const listener = (_event, payload) => {
+      callback(payload);
+    };
+    ipcRenderer.on("ai-chat:launch", listener);
+    return () => {
+      ipcRenderer.removeListener("ai-chat:launch", listener);
+    };
+  },
   getUpdateState() {
     return ipcRenderer.invoke("update:get-state");
   },

@@ -24,6 +24,7 @@ const isGeneratorRoute = computed(() => route.name === "generator");
 const isRuntimeRoute = computed(() => route.name === "runtime");
 const isQuickLauncherRoute = computed(() => route.name === "quick-launcher");
 const isSystemRecorderRoute = computed(() => route.name === "system-recorder");
+const isSystemAiRoute = computed(() => route.name === "system-ai");
 
 function handleTabSelect(tabId: string) {
     activeTab.value = tabId;
@@ -101,7 +102,7 @@ onUnmounted(() => {
 
 <template>
     <div
-        v-if="isQuickLauncherRoute || isSystemRecorderRoute"
+        v-if="isQuickLauncherRoute || isSystemRecorderRoute || isSystemAiRoute"
         class="min-h-screen bg-slate-950 text-slate-100"
     >
         <RouterView />

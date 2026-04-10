@@ -1252,7 +1252,13 @@ function normalizeLaunchPayload(input) {
 }
 
 function supportsSystemAppLaunchPayload(entry) {
-  if (!entry || entry.launchType !== "command") {
+  if (!entry) {
+    return false;
+  }
+  if (entry.acceptsLaunchPayload === true) {
+    return true;
+  }
+  if (entry.launchType !== "command") {
     return false;
   }
   return String(entry.id || "").startsWith("builtin:");

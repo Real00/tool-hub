@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.0] - 2026-04-10
+
+### Added
+- 新增内置 `AI` 系统应用与独立窗口路由，支持从 quick launcher 通过 payload 直接发起对话。
+- 新增 OpenAI SDK 与 Anthropic SDK provider 接入，支持 `Chat Completions`、`Responses` 与 Claude Messages 流式对话。
+- 新增 AI 设置持久化、会话历史持久化、模型列表刷新、调试日志开关与 `previous_response_id` 驱动的 Responses 多轮会话。
+- 新增 AI 消息 Markdown 渲染链，支持代码高亮、表格、引用、链接与代码块复制按钮。
+- 新增图片粘贴参与对话能力，支持图片预览、删除待发送图片，以及历史消息中的图片回显。
+
+### Fixed
+- 修复 quick launcher recent 列表来源文案重复叠加、剪切板路径结果过期、目录路径重复动作等问题。
+- 修复 AI 流式请求在窗口重开、取消、异常退出后的状态恢复与清理问题，避免残留 `streaming` 状态或丢失 Stop 按钮。
+- 修复 OpenAI / Anthropic SDK 请求取消、Responses JSON 回退解析、请求调试输出与图片附件跨 IPC 传输问题。
+- 修复代码块复制按钮在 Markdown 安全净化后被过滤的问题，并修复粘贴单张图片出现双缩略图的问题。
+
+### Changed
+- AI 面板布局升级为桌面双栏 + 小屏抽屉式历史列表，左右区域独立滚动并支持桌面端历史栏收起。
+- AI 页面与消息气泡样式整体收紧：顶部栏更紧凑、正文颜色更柔和、Markdown 行距和列表间距更密实。
+- 开发服务器端口从 `5173` 调整为 `5273`，并同步更新 Electron 开发启动流程。
+
 ## [0.3.0] - 2026-04-08
 
 ### Added

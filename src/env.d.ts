@@ -39,6 +39,16 @@ import type {
   SystemRecorderState,
 } from "./types/system-app";
 import type { UpdateState } from "./types/update";
+import type {
+  AiChatLaunchState,
+  AiChatMessage,
+  AiChatModelOption,
+  AiChatSessionSummary,
+  AiChatSettings,
+  AiChatStreamEvent,
+  SendAiChatMessageInput,
+  SendAiChatMessageResult,
+} from "./types/ai-chat";
 
 declare global {
   interface ToolHubApi {
@@ -152,6 +162,19 @@ declare global {
     getQuickLauncherClipboardPathContext: () => Promise<ClipboardPathContext | null>;
     openClipboardPathFile: (path: string) => Promise<boolean>;
     openClipboardPathLocation: (path: string) => Promise<boolean>;
+    getAiChatSettings: () => Promise<AiChatSettings>;
+    saveAiChatSettings: (input: AiChatSettings) => Promise<AiChatSettings>;
+    listAiChatModels: (input: Pick<AiChatSettings, "provider" | "baseUrl" | "apiKey">) => Promise<AiChatModelOption[]>;
+    listAiChatSessions: () => Promise<AiChatSessionSummary[]>;
+    createAiChatSession: () => Promise<AiChatSessionSummary>;
+    deleteAiChatSession: (sessionId: string) => Promise<boolean>;
+    getAiChatSessionMessages: (sessionId: string) => Promise<AiChatMessage[]>;
+    sendAiChatMessage: (input: SendAiChatMessageInput) => Promise<SendAiChatMessageResult>;
+    beginAiChatStream: (requestId: string) => Promise<boolean>;
+    cancelAiChatStream: (requestId: string) => Promise<boolean>;
+    getAiChatLaunchState: () => Promise<AiChatLaunchState>;
+    subscribeAiChatStream: (callback: (event: AiChatStreamEvent) => void) => () => void;
+    subscribeAiChatLaunch: (callback: (state: AiChatLaunchState) => void) => () => void;
     setQuickLauncherWindowSize: (payload: {
       mode: "compact" | "expanded";
       resultCount?: number;

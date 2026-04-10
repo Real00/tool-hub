@@ -22,6 +22,18 @@ function createRecorderIconDataUrl(mode) {
   `);
 }
 
+function createAiIconDataUrl() {
+  return makeSvgDataUrl(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+      <rect width="64" height="64" rx="16" fill="#0f172a"/>
+      <rect x="10" y="10" width="44" height="44" rx="12" fill="#111827" stroke="#34d399" stroke-width="3"/>
+      <path d="M22 38 L26 24 L32 36 L38 20 L42 38" fill="none" stroke="#34d399" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="24" cy="44" r="2.5" fill="#f8fafc"/>
+      <circle cx="40" cy="44" r="2.5" fill="#f8fafc"/>
+    </svg>
+  `);
+}
+
 function resolveSystem32Path(fileName) {
   return path.join(getWindowsDir(), "System32", fileName);
 }
@@ -47,6 +59,18 @@ function getBuiltinSystemTools() {
   const explorerExe = path.join(getWindowsDir(), "explorer.exe");
 
   return [
+    {
+      id: "builtin:ai-chat",
+      name: "AI",
+      source: "System Tool",
+      launchType: "internal",
+      category: "launcher",
+      description: "内置 AI 对话面板，支持 OpenAI 兼容接口和多轮流式对话。",
+      iconDataUrl: createAiIconDataUrl(),
+      keywords: ["ai", "chat", "assistant", "llm", "对话", "模型", "智能助手"],
+      matchBoost: 420,
+      acceptsLaunchPayload: true,
+    },
     {
       id: "builtin:screen-recorder",
       name: "屏幕录像",

@@ -20,6 +20,7 @@ const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 
 const { createAutoUpdateController } = require("./main-process/auto-update.cjs");
+const { createAiChatManager } = require("./ai-chat-manager.cjs");
 const { createWindowManager } = require("./main-process/window-manager.cjs");
 const { createAppRuntimeWindowsController } = require("./main-process/app-runtime-windows.cjs");
 const { createContextDispatchController } = require("./main-process/context-dispatch.cjs");
@@ -202,6 +203,10 @@ const systemRecorderManager = createSystemRecorderManager({
   dialog,
   screen,
   getMainWindow: () => windowManager.getMainWindow(),
+  getSettingsStore,
+});
+
+const aiChatManager = createAiChatManager({
   getSettingsStore,
 });
 
@@ -767,6 +772,10 @@ ipcMain.handle("system-apps:open", async (_event, appId, launchPayload) => {
     windowManager.showSystemRecorderWindow(appId);
     return true;
   }
+  if (appId === "builtin:ai-chat") {
+    windowManager.showAiChatWindow(launchPayload, launchPayload ? "quick-launcher" : "manual");
+    return true;
+  }
   return getSystemAppsManager().openSystemApp(appId, launchPayload);
 });
 
@@ -856,6 +865,58 @@ ipcMain.handle("quick-launcher:set-size", async (_event, mode) => {
   return true;
 });
 
+ipcMain.handle("ai-chat:get-settings", async () => {
+  return getSettingsStore().getAiChatSettings();
+});
+
+ipcMain.handle("ai-chat:save-settings", async (_event, input) => {
+  return getSettingsStore().saveAiChatSettings(input);
+});
+
+ipcMain.handle("ai-chat:list-models", async (_event, input) => {
+  return aiChatManager.listModels(input);
+});
+
+ipcMain.handle("ai-chat:list-sessions", async () => {
+  return getSettingsStore().listAiChatSessions();
+});
+
+ipcMain.handle("ai-chat:create-session", async () => {
+  return getSettingsStore().createAiChatSession();
+});
+
+ipcMain.handle("ai-chat:delete-session", async (_event, sessionId) => {
+  return getSettingsStore().deleteAiChatSession(sessionId);
+});
+
+ipcMain.handle("ai-chat:get-session-messages", async (_event, sessionId) => {
+  return getSettingsStore().listAiChatSessionMessages(sessionId);
+});
+
+ipcMain.handle("ai-chat:send-message", async (_event, input) => {
+  return aiChatManager.sendMessage(input);
+});
+
+ipcMain.handle("ai-chat:begin-stream", async (_event, requestId) => {
+  return aiChatManager.beginStream(requestId);
+});
+
+ipcMain.handle("ai-chat:cancel-stream", async (_event, requestId) => {
+  return aiChatManager.cancelStream(requestId);
+});
+
+ipcMain.handle("ai-chat:get-launch-state", async () => {
+  return windowManager.getAiChatLaunchState();
+});
+
+ipcMain.on("ai-chat:stream-subscribe", (event) => {
+  aiChatManager.subscribe(event.sender);
+});
+
+ipcMain.on("ai-chat:stream-unsubscribe", (event) => {
+  aiChatManager.unsubscribe(event.sender);
+});
+
 ipcMain.handle("update:get-state", async () => {
   return autoUpdateController.getState();
 });
@@ -910,6 +971,12 @@ if (!hasSingleInstanceLock) {
       { useSystemPicker: false },
     );
     ensureWindowsContextMenuRegistered();
+    await getSettingsStore().reconcileAiChatStreamingMessages().catch((error) => {
+      console.warn(
+        "AI chat streaming state reconciliation failed:",
+        error instanceof Error ? error.message : String(error),
+      );
+    });
     windowManager.createMainWindow();
     windowManager.createTray();
     const configuredQuickLauncherHotkey = await loadQuickLauncherHotkeyFromSettings();
@@ -992,6 +1059,7 @@ if (!hasSingleInstanceLock) {
   app.on("before-quit", () => {
     windowManager.markQuitting();
     windowManager.destroyQuickLauncherWindow();
+    windowManager.closeAiChatWindow();
     windowManager.closeSystemRecorderWindow();
     autoUpdateController.cancelStartupCheck();
     contextDispatchController.dispose();
