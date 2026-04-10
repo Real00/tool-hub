@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   getSystemAppsByIds,
   isElectronRuntime,
@@ -62,6 +62,8 @@ const SUBSEQUENT_SEARCH_DEBOUNCE_MS = 100;
 
 const canSearchApps = isElectronRuntime();
 const launcherRootRef = ref<HTMLElement | null>(null);
+const launcherResultsPanelRef = ref<HTMLElement | null>(null);
+const launcherResultItemRefs = ref<(HTMLElement | null)[]>([]);
 const launcherQuery = ref("");
 const launcherResults = ref<LauncherResultItem[]>([]);
 const launcherStatus = ref<"idle" | "loading" | "error">("idle");
@@ -78,6 +80,7 @@ let unsubscribeLauncherHistory: (() => void) | null = null;
 const recentIconBackfillInFlight = new Set<string>();
 const recentIconBackfillAttemptAt = new Map<string, number>();
 let disposed = false;
+let launcherInteractionMode: "keyboard" | "pointer" = "pointer";
 
 const launcherPlaceholder = computed(() => {
   if (launcherPayloadTarget.value) {
@@ -109,6 +112,72 @@ function resetLauncherResults() {
 
 function refreshLauncherHistory() {
   launcherHistoryByKey.value = readLauncherHistoryMap();
+}
+
+function setLauncherResultItemRef(element: Element | null, index: number) {
+  launcherResultItemRefs.value[index] = element instanceof HTMLElement ? element : null;
+}
+
+function getLauncherActiveResultId() {
+  return launcherActiveIndex.value >= 0
+    ? launcherResults.value[launcherActiveIndex.value]?.id ?? null
+    : null;
+}
+
+function setLauncherActiveResultIndex(nextResults: LauncherResultItem[], options?: {
+  preferredId?: string | null;
+  fallbackIndex?: number;
+}) {
+  if (nextResults.length === 0) {
+    launcherActiveIndex.value = -1;
+    return;
+  }
+
+  if (options?.preferredId) {
+    const preferredIndex = nextResults.findIndex((item) => item.id === options.preferredId);
+    if (preferredIndex >= 0) {
+      launcherActiveIndex.value = preferredIndex;
+      return;
+    }
+  }
+
+  const fallbackIndex = options?.fallbackIndex ?? 0;
+  launcherActiveIndex.value = Math.min(Math.max(fallbackIndex, 0), nextResults.length - 1);
+}
+
+function applyLauncherResults(nextResults: LauncherResultItem[], options?: {
+  preserveActiveItem?: boolean;
+  fallbackIndex?: number;
+}) {
+  const preferredId = options?.preserveActiveItem ? getLauncherActiveResultId() : null;
+  const fallbackIndex = options?.preserveActiveItem
+    ? launcherActiveIndex.value
+    : (options?.fallbackIndex ?? 0);
+  launcherResultItemRefs.value = [];
+  launcherResults.value = nextResults;
+  setLauncherActiveResultIndex(nextResults, {
+    preferredId,
+    fallbackIndex,
+  });
+}
+
+function scrollLauncherActiveResultIntoView() {
+  const item = launcherActiveIndex.value >= 0
+    ? launcherResultItemRefs.value[launcherActiveIndex.value]
+    : null;
+  if (!launcherResultsPanelRef.value || !item) {
+    return;
+  }
+  item.scrollIntoView({
+    block: "nearest",
+  });
+}
+
+function handleLauncherResultPointerMove(index: number) {
+  launcherInteractionMode = "pointer";
+  if (launcherActiveIndex.value !== index) {
+    launcherActiveIndex.value = index;
+  }
 }
 
 function buildRecentLauncherResults(): LauncherResultItem[] {
@@ -301,8 +370,7 @@ function backfillSearchSystemIcons(items: LauncherResultItem[], token: number) {
 
 function showRecentLauncherResults() {
   const recent = buildRecentLauncherResults();
-  launcherResults.value = recent;
-  launcherActiveIndex.value = recent.length > 0 ? 0 : -1;
+  applyLauncherResults(recent);
   launcherStatus.value = "idle";
   backfillRecentSystemIcons(recent);
 }
@@ -316,7 +384,7 @@ function searchInstalledApps(query: string): LauncherResultItem[] {
   });
 }
 
-async function runLauncherSearch() {
+async function runLauncherSearch(preserveActiveItem = false) {
   if (!canSearchApps) {
     return;
   }
@@ -371,8 +439,9 @@ async function runLauncherSearch() {
       })
       .slice(0, SEARCH_LIMIT);
 
-    launcherResults.value = mergedResults;
-    launcherActiveIndex.value = mergedResults.length > 0 ? 0 : -1;
+    applyLauncherResults(mergedResults, {
+      preserveActiveItem,
+    });
     launcherStatus.value = "idle";
     backfillSearchSystemIcons(mergedResults, token);
   } catch (error) {
@@ -381,8 +450,9 @@ async function runLauncherSearch() {
     }
 
     if (installedResults.length > 0) {
-      launcherResults.value = installedResults.slice(0, SEARCH_LIMIT);
-      launcherActiveIndex.value = 0;
+      applyLauncherResults(installedResults.slice(0, SEARCH_LIMIT), {
+        preserveActiveItem,
+      });
       launcherStatus.value = "idle";
       return;
     }
@@ -403,6 +473,18 @@ function scheduleLauncherSearch() {
     : SUBSEQUENT_SEARCH_DEBOUNCE_MS;
   launcherSearchTimer = setTimeout(() => {
     void runLauncherSearch();
+  }, nextDelay);
+}
+
+function scheduleLauncherSearchPreservingSelection() {
+  if (launcherSearchTimer) {
+    clearTimeout(launcherSearchTimer);
+  }
+  const nextDelay = launcherQuery.value.trim().length <= 1
+    ? FIRST_QUERY_SEARCH_DEBOUNCE_MS
+    : SUBSEQUENT_SEARCH_DEBOUNCE_MS;
+  launcherSearchTimer = setTimeout(() => {
+    void runLauncherSearch(true);
   }, nextDelay);
 }
 
@@ -449,10 +531,14 @@ watch(
       return;
     }
     if (!launcherQuery.value.trim()) {
-      showRecentLauncherResults();
+      applyLauncherResults(buildRecentLauncherResults(), {
+        preserveActiveItem: true,
+      });
+      launcherStatus.value = "idle";
+      backfillRecentSystemIcons(launcherResults.value);
       return;
     }
-    scheduleLauncherSearch();
+    scheduleLauncherSearchPreservingSelection();
   },
 );
 
@@ -463,6 +549,7 @@ function moveLauncherSelection(step: number) {
     return;
   }
 
+  launcherInteractionMode = "keyboard";
   const current = launcherActiveIndex.value < 0 ? 0 : launcherActiveIndex.value;
   launcherActiveIndex.value = (current + step + count) % count;
 }
@@ -645,10 +732,22 @@ onMounted(() => {
       !launcherPayloadTarget.value &&
       !launcherQuery.value.trim()
     ) {
-      showRecentLauncherResults();
+      applyLauncherResults(buildRecentLauncherResults(), {
+        preserveActiveItem: true,
+      });
+      launcherStatus.value = "idle";
+      backfillRecentSystemIcons(launcherResults.value);
     }
   });
   window.addEventListener("pointerdown", handleGlobalPointerDown);
+});
+
+watch(launcherActiveIndex, async (index) => {
+  if (index < 0 || launcherInteractionMode !== "keyboard") {
+    return;
+  }
+  await nextTick();
+  scrollLauncherActiveResultIntoView();
 });
 
 onBeforeUnmount(() => {
@@ -701,11 +800,13 @@ onBeforeUnmount(() => {
           >
             <div
               v-if="launcherResults.length > 0"
+              ref="launcherResultsPanelRef"
               class="max-h-72 overflow-y-auto py-1"
             >
               <button
                 v-for="(app, index) in launcherResults"
                 :key="app.id"
+                :ref="(element) => setLauncherResultItemRef(element as Element | null, index)"
                 type="button"
                 class="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition"
                 :class="
@@ -713,7 +814,7 @@ onBeforeUnmount(() => {
                     ? 'bg-cyan-500/15 text-cyan-100'
                     : 'text-slate-200 hover:bg-slate-900 hover:text-slate-100'
                 "
-                @mouseenter="launcherActiveIndex = index"
+                @pointermove="handleLauncherResultPointerMove(index)"
                 @click="openLauncherItem(index)"
                 @contextmenu="handleLauncherResultContextMenu(app, $event)"
               >

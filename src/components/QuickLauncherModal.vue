@@ -77,6 +77,9 @@ const SUBSEQUENT_SEARCH_DEBOUNCE_MS = 90;
 const canSearchApps = isElectronRuntime();
 const modalRootRef = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLInputElement | null>(null);
+const resultsPanelRef = ref<HTMLElement | null>(null);
+const favoriteTipRef = ref<HTMLElement | null>(null);
+const resultItemRefs = ref<(HTMLElement | null)[]>([]);
 const query = ref("");
 const results = ref<LauncherResultItem[]>([]);
 const status = ref<"idle" | "loading" | "error">("idle");
@@ -96,6 +99,7 @@ let unsubscribeLauncherHistory: (() => void) | null = null;
 const recentIconBackfillInFlight = new Set<string>();
 const recentIconBackfillAttemptAt = new Map<string, number>();
 let disposed = false;
+let activeInteractionMode: "keyboard" | "pointer" = "pointer";
 
 const clipboardPathHint = computed(() => {
   if (launchPayloadTarget.value || query.value.trim()) {
@@ -192,6 +196,82 @@ function resetResults() {
 
 function refreshLauncherHistory() {
   launcherHistoryByKey.value = readLauncherHistoryMap();
+}
+
+function setResultItemRef(element: Element | null, index: number) {
+  resultItemRefs.value[index] = element instanceof HTMLElement ? element : null;
+}
+
+function getActiveResultId() {
+  return activeIndex.value >= 0 ? results.value[activeIndex.value]?.id ?? null : null;
+}
+
+function setActiveResultIndex(nextResults: LauncherResultItem[], options?: {
+  preferredId?: string | null;
+  fallbackIndex?: number;
+}) {
+  if (nextResults.length === 0) {
+    activeIndex.value = -1;
+    return;
+  }
+
+  if (options?.preferredId) {
+    const preferredIndex = nextResults.findIndex((item) => item.id === options.preferredId);
+    if (preferredIndex >= 0) {
+      activeIndex.value = preferredIndex;
+      return;
+    }
+  }
+
+  const fallbackIndex = options?.fallbackIndex ?? 0;
+  activeIndex.value = Math.min(Math.max(fallbackIndex, 0), nextResults.length - 1);
+}
+
+function applyResults(nextResults: LauncherResultItem[], options?: {
+  preserveActiveItem?: boolean;
+  fallbackIndex?: number;
+}) {
+  const preferredId = options?.preserveActiveItem ? getActiveResultId() : null;
+  const fallbackIndex = options?.preserveActiveItem
+    ? activeIndex.value
+    : (options?.fallbackIndex ?? 0);
+  resultItemRefs.value = [];
+  results.value = nextResults;
+  setActiveResultIndex(nextResults, {
+    preferredId,
+    fallbackIndex,
+  });
+}
+
+function scrollActiveResultIntoView() {
+  const panel = resultsPanelRef.value;
+  const item = activeIndex.value >= 0 ? resultItemRefs.value[activeIndex.value] : null;
+  if (!panel || !item) {
+    return;
+  }
+
+  const panelRect = panel.getBoundingClientRect();
+  const itemRect = item.getBoundingClientRect();
+  const topPadding = 8;
+  const bottomPadding = 8 + (favoriteTipRef.value?.offsetHeight ?? 0);
+  const visibleTop = panelRect.top + topPadding;
+  const visibleBottom = panelRect.bottom - bottomPadding;
+
+  if (itemRect.top < visibleTop) {
+    panel.scrollTop -= visibleTop - itemRect.top;
+    return;
+  }
+
+  if (itemRect.bottom > visibleBottom) {
+    panel.scrollTop += itemRect.bottom - visibleBottom;
+  }
+}
+
+function handleResultPointerMove(index: number) {
+  activeInteractionMode = "pointer";
+  if (activeIndex.value !== index) {
+    activeIndex.value = index;
+  }
 }
 
 function buildClipboardPathResults(): LauncherResultItem[] {
@@ -545,8 +625,7 @@ function backfillSearchSystemIcons(items: LauncherResultItem[], token: number) {
 
 function showDefaultResults() {
   const nextResults = buildDefaultResults();
-  results.value = nextResults;
-  activeIndex.value = nextResults.length > 0 ? 0 : -1;
+  applyResults(nextResults);
   status.value = "idle";
   backfillRecentSystemIcons(nextResults);
 }
@@ -577,7 +656,7 @@ function searchInstalledApps(input: string): LauncherResultItem[] {
   });
 }
 
-async function runSearch() {
+async function runSearch(preserveActiveItem = false) {
   if (!canSearchApps || !props.open) {
     return;
   }
@@ -631,8 +710,9 @@ async function runSearch() {
       })
       .slice(0, SEARCH_LIMIT);
 
-    results.value = mergedResults;
-    activeIndex.value = mergedResults.length > 0 ? 0 : -1;
+    applyResults(mergedResults, {
+      preserveActiveItem,
+    });
     status.value = "idle";
     backfillSearchSystemIcons(mergedResults, token);
   } catch (error) {
@@ -641,8 +721,9 @@ async function runSearch() {
     }
 
     if (installedResults.length > 0) {
-      results.value = installedResults.slice(0, SEARCH_LIMIT);
-      activeIndex.value = 0;
+      applyResults(installedResults.slice(0, SEARCH_LIMIT), {
+        preserveActiveItem,
+      });
       status.value = "idle";
       return;
     }
@@ -666,6 +747,18 @@ function scheduleSearch() {
   }, nextDelay);
 }
 
+function scheduleSearchPreservingSelection() {
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+  }
+  const nextDelay = query.value.trim().length <= 1
+    ? FIRST_QUERY_SEARCH_DEBOUNCE_MS
+    : SUBSEQUENT_SEARCH_DEBOUNCE_MS;
+  searchTimer = setTimeout(() => {
+    void runSearch(true);
+  }, nextDelay);
+}
+
 function moveSelection(step: number) {
   const count = results.value.length;
   if (count === 0) {
@@ -673,6 +766,7 @@ function moveSelection(step: number) {
     return;
   }
 
+  activeInteractionMode = "keyboard";
   const current = activeIndex.value < 0 ? 0 : activeIndex.value;
   activeIndex.value = (current + step + count) % count;
 }
@@ -922,10 +1016,14 @@ watch(
       return;
     }
     if (!query.value.trim()) {
-      showDefaultResults();
+      applyResults(buildDefaultResults(), {
+        preserveActiveItem: true,
+      });
+      status.value = "idle";
+      backfillRecentSystemIcons(results.value);
       return;
     }
-    scheduleSearch();
+    scheduleSearchPreservingSelection();
   },
 );
 
@@ -956,6 +1054,14 @@ watch(
   { immediate: true },
 );
 
+watch(activeIndex, async (index) => {
+  if (index < 0 || activeInteractionMode !== "keyboard") {
+    return;
+  }
+  await nextTick();
+  scrollActiveResultIntoView();
+});
+
 onBeforeUnmount(() => {
   disposed = true;
   unsubscribeLauncherHistory?.();
@@ -972,7 +1078,11 @@ onMounted(async () => {
   unsubscribeLauncherHistory = subscribeLauncherHistoryUpdates(() => {
     refreshLauncherHistory();
     if (props.open && !launchPayloadTarget.value && !query.value.trim()) {
-      showDefaultResults();
+      applyResults(buildDefaultResults(), {
+        preserveActiveItem: true,
+      });
+      status.value = "idle";
+      backfillRecentSystemIcons(results.value);
     }
   });
   if (props.open) {
@@ -1029,50 +1139,55 @@ onMounted(async () => {
 
       <div
         v-if="results.length > 0 && !launchPayloadTarget"
+        ref="resultsPanelRef"
         :class="resultsPanelClass"
       >
-        <button
-          v-for="(app, index) in results"
-          :key="app.id"
-          type="button"
-          class="flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm transition first:pt-2.5 last:pb-2.5"
-          :class="
-            activeIndex === index
-              ? 'bg-cyan-500/15 text-cyan-100'
-              : 'text-slate-200 hover:bg-slate-900 hover:text-slate-100'
-          "
-          @mouseenter="activeIndex = index"
-          @click="openResult(index)"
-          @contextmenu="handleResultContextMenu(app, $event)"
-        >
-          <span class="flex min-w-0 items-center gap-2">
-            <span
-              class="inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-800 text-[10px] font-semibold text-slate-200"
-            >
-              <img
-                v-if="app.iconDataUrl"
-                :src="app.iconDataUrl"
-                alt=""
-                class="h-5 w-5 object-contain"
-              />
-              <span v-else>{{ app.name.slice(0, 1) }}</span>
-            </span>
-            <span class="min-w-0">
-              <span class="block truncate">{{ app.name }}</span>
+        <div :class="showFavoriteTip ? 'pb-9' : ''">
+          <button
+            v-for="(app, index) in results"
+            :key="app.id"
+            :ref="(element) => setResultItemRef(element as Element | null, index)"
+            type="button"
+            class="flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm transition first:pt-2.5 last:pb-2.5"
+            :class="
+              activeIndex === index
+                ? 'bg-cyan-500/15 text-cyan-100'
+                : 'text-slate-200 hover:bg-slate-900 hover:text-slate-100'
+            "
+            @pointermove="handleResultPointerMove(index)"
+            @click="openResult(index)"
+            @contextmenu="handleResultContextMenu(app, $event)"
+          >
+            <span class="flex min-w-0 items-center gap-2">
               <span
-                v-if="app.description"
-                class="block truncate text-xs text-slate-500"
+                class="inline-flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-800 text-[10px] font-semibold text-slate-200"
               >
-                {{ app.description }}
+                <img
+                  v-if="app.iconDataUrl"
+                  :src="app.iconDataUrl"
+                  alt=""
+                  class="h-5 w-5 object-contain"
+                />
+                <span v-else>{{ app.name.slice(0, 1) }}</span>
+              </span>
+              <span class="min-w-0">
+                <span class="block truncate">{{ app.name }}</span>
+                <span
+                  v-if="app.description"
+                  class="block truncate text-xs text-slate-500"
+                >
+                  {{ app.description }}
+                </span>
               </span>
             </span>
-          </span>
-          <span class="shrink-0 text-xs text-slate-400">
-            {{ app.favorite ? "★ " : "" }}{{ app.source }}
-          </span>
-        </button>
+            <span class="shrink-0 text-xs text-slate-400">
+              {{ app.favorite ? "★ " : "" }}{{ app.source }}
+            </span>
+          </button>
+        </div>
         <p
           v-if="showFavoriteTip"
+          ref="favoriteTipRef"
           class="sticky bottom-0 border-t border-slate-800 bg-slate-950/95 px-4 py-2 text-xs text-slate-500"
         >
           Tip: right-click a result to toggle favorite.
