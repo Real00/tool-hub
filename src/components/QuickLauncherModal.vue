@@ -21,6 +21,7 @@ import {
   toggleLauncherFavorite,
   upsertLauncherHistoryIcons,
 } from "../composables/launcher-history";
+import { searchInstalledLauncherApps } from "../composables/launcher-search";
 import type { ClipboardPathContext, InstalledApp } from "../types/app";
 import type { SystemAppEntry } from "../types/system-app";
 
@@ -63,6 +64,8 @@ const SYSTEM_SEARCH_LIMIT = 10;
 const INSTALLED_SEARCH_LIMIT = 20;
 const ICON_BACKFILL_LIMIT = 50;
 const ICON_BACKFILL_RETRY_MS = 5 * 60 * 1000;
+const FIRST_QUERY_SEARCH_DEBOUNCE_MS = 0;
+const SUBSEQUENT_SEARCH_DEBOUNCE_MS = 90;
 
 const canSearchApps = isElectronRuntime();
 const modalRootRef = ref<HTMLElement | null>(null);
@@ -460,84 +463,13 @@ function updateMeasuredContentHeight() {
   // Removed - no longer using measured content height
 }
 
-function tokenizeQuery(input: string): string[] {
-  return input
-    .toLowerCase()
-    .split(/\s+/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-}
-
-function computeInstalledScore(app: InstalledApp, normalizedQuery: string, tokens: string[]): number {
-  const normalizedName = app.name.toLowerCase();
-  const normalizedId = app.id.toLowerCase();
-  const normalizedTabId = app.tabId.toLowerCase();
-  const combined = `${normalizedName} ${normalizedId} ${normalizedTabId}`;
-
-  let score = 0;
-
-  if (normalizedName === normalizedQuery) {
-    score += 260;
-  } else if (normalizedName.startsWith(normalizedQuery)) {
-    score += 210;
-  } else if (normalizedName.includes(normalizedQuery)) {
-    score += 160;
-  }
-
-  if (normalizedId === normalizedQuery) {
-    score += 180;
-  } else if (normalizedId.startsWith(normalizedQuery)) {
-    score += 130;
-  } else if (normalizedId.includes(normalizedQuery)) {
-    score += 90;
-  }
-
-  if (normalizedTabId.includes(normalizedQuery)) {
-    score += 40;
-  }
-
-  for (let i = 0; i < tokens.length; i += 1) {
-    if (combined.includes(tokens[i])) {
-      score += 20;
-    }
-  }
-
-  return score;
-}
-
 function searchInstalledApps(input: string): LauncherResultItem[] {
-  const normalizedQuery = input.trim().toLowerCase();
-  const tokens = tokenizeQuery(normalizedQuery);
-
-  const scored = props.installedApps
-    .map((app) => {
-      const score = computeInstalledScore(app, normalizedQuery, tokens);
-      return { app, score };
-    })
-    .filter((item) => item.score > 0)
-    .sort((a, b) => {
-      if (a.score !== b.score) {
-        return b.score - a.score;
-      }
-      return a.app.name.localeCompare(b.app.name);
-    })
-    .slice(0, INSTALLED_SEARCH_LIMIT);
-
-  return scored.map(({ app, score }) => ({
-    historyKey: makeLauncherHistoryKey("installed", app.id),
-    favorite: launcherHistoryByKey.value.get(makeLauncherHistoryKey("installed", app.id))?.favorite === true,
-    id: `installed:${app.id}`,
-    kind: "installed",
-    targetId: app.id,
-    name: app.name,
-    source: app.running ? "Installed / Running" : "Installed",
-    score:
-      score +
-      computeLauncherHistoryBoost(
-        launcherHistoryByKey.value.get(makeLauncherHistoryKey("installed", app.id)),
-      ),
-    acceptsLaunchPayload: true,
-  }));
+  return searchInstalledLauncherApps({
+    installedApps: props.installedApps,
+    historyByKey: launcherHistoryByKey.value,
+    query: input,
+    limit: INSTALLED_SEARCH_LIMIT,
+  });
 }
 
 async function runSearch() {
@@ -621,9 +553,12 @@ function scheduleSearch() {
   if (searchTimer) {
     clearTimeout(searchTimer);
   }
+  const nextDelay = query.value.trim().length <= 1
+    ? FIRST_QUERY_SEARCH_DEBOUNCE_MS
+    : SUBSEQUENT_SEARCH_DEBOUNCE_MS;
   searchTimer = setTimeout(() => {
     void runSearch();
-  }, 150);
+  }, nextDelay);
 }
 
 function moveSelection(step: number) {

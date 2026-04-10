@@ -15,6 +15,9 @@ const ICON_CACHE_DIR_NAME = "icon-cache";
 const ICON_CACHE_FILE_VERSION = 1;
 const ICON_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const INDEX_TTL_MS = 5 * 60 * 1000;
+const SEARCH_PREFIX_MAX_LENGTH = 32;
+const SEARCH_FRAGMENT_LENGTH = 3;
+const SEARCH_INDEX_MIN_QUERY_LENGTH = 2;
 const START_MENU_EXTENSIONS = new Set([".lnk", ".url", ".appref-ms", ".exe"]);
 const SOURCE_ORDER = ["System Tool", "Start Menu", "UWP"];
 const IMAGE_ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".ico", ".svg"]);
@@ -43,6 +46,11 @@ const PINYIN_INITIAL_MAP = new Map([
 const indexState = {
   items: [],
   byId: new Map(),
+  namePrefixMap: new Map(),
+  nameSquashedPrefixMap: new Map(),
+  pinyinPrefixMap: new Map(),
+  tokenMap: new Map(),
+  fragmentMap: new Map(),
   updatedAt: 0,
   refreshPromise: null,
 };
@@ -146,6 +154,209 @@ function formatSourceSet(sourceSet) {
 
 function makeSearchText(name, launchTarget, keywords = [], source = "") {
   return normalizeText([name, launchTarget, source, ...keywords].join(" "));
+}
+
+function addSearchIndexBucket(indexMap, key, item) {
+  const normalizedKey = String(key ?? "").trim();
+  if (!normalizedKey) {
+    return;
+  }
+
+  const existing = indexMap.get(normalizedKey);
+  if (existing) {
+    existing.push(item);
+    return;
+  }
+  indexMap.set(normalizedKey, [item]);
+}
+
+function buildPrefixKeys(value) {
+  const normalizedValue = String(value ?? "").trim();
+  if (!normalizedValue) {
+    return [];
+  }
+
+  const output = [];
+  let previous = "";
+  const maxLength = Math.min(SEARCH_PREFIX_MAX_LENGTH, normalizedValue.length);
+  for (let i = 1; i <= maxLength; i += 1) {
+    const prefix = normalizedValue.slice(0, i).trim();
+    if (!prefix || prefix === previous) {
+      continue;
+    }
+    output.push(prefix);
+    previous = prefix;
+  }
+  return output;
+}
+
+function buildTokenSet(parts) {
+  const output = [];
+  const seen = new Set();
+
+  for (let i = 0; i < parts.length; i += 1) {
+    const tokens = tokenize(parts[i]);
+    for (let j = 0; j < tokens.length; j += 1) {
+      const token = tokens[j];
+      if (!token || seen.has(token)) {
+        continue;
+      }
+      seen.add(token);
+      output.push(token);
+    }
+  }
+
+  return output;
+}
+
+function buildSearchFragments(tokens) {
+  const output = [];
+  const seen = new Set();
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = String(tokens[i] ?? "").trim();
+    if (!token) {
+      continue;
+    }
+    if (token.length <= SEARCH_FRAGMENT_LENGTH) {
+      if (!seen.has(token)) {
+        seen.add(token);
+        output.push(token);
+      }
+      continue;
+    }
+    for (let cursor = 0; cursor <= token.length - SEARCH_FRAGMENT_LENGTH; cursor += 1) {
+      const fragment = token.slice(cursor, cursor + SEARCH_FRAGMENT_LENGTH);
+      if (!fragment || seen.has(fragment)) {
+        continue;
+      }
+      seen.add(fragment);
+      output.push(fragment);
+    }
+  }
+
+  return output;
+}
+
+function buildIndexedSearchEntry(item) {
+  const normalizedName = normalizeText(item.name);
+  const normalizedSearchText = normalizeText(item.searchText);
+  const nameSquashed = normalizedName.replace(/\s+/g, "");
+  const searchTextSquashed = normalizedSearchText.replace(/\s+/g, "");
+  const searchTokens = buildTokenSet([item.name, ...(item.keywords || [])]);
+  return {
+    ...item,
+    normalizedName,
+    normalizedSearchText,
+    nameSquashed,
+    searchTextSquashed,
+    searchTokens,
+    searchFragments: buildSearchFragments(searchTokens),
+    sortName: String(item.name ?? ""),
+  };
+}
+
+function buildSearchLookupState(items) {
+  const nextState = {
+    byId: new Map(),
+    namePrefixMap: new Map(),
+    nameSquashedPrefixMap: new Map(),
+    pinyinPrefixMap: new Map(),
+    tokenMap: new Map(),
+    fragmentMap: new Map(),
+  };
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    nextState.byId.set(item.id, item);
+
+    const namePrefixes = buildPrefixKeys(item.normalizedName);
+    for (let j = 0; j < namePrefixes.length; j += 1) {
+      addSearchIndexBucket(nextState.namePrefixMap, namePrefixes[j], item);
+    }
+
+    const squashedPrefixes = buildPrefixKeys(item.nameSquashed);
+    for (let j = 0; j < squashedPrefixes.length; j += 1) {
+      addSearchIndexBucket(nextState.nameSquashedPrefixMap, squashedPrefixes[j], item);
+    }
+
+    const pinyinPrefixes = buildPrefixKeys(item.pinyinInitials);
+    for (let j = 0; j < pinyinPrefixes.length; j += 1) {
+      addSearchIndexBucket(nextState.pinyinPrefixMap, pinyinPrefixes[j], item);
+    }
+
+    for (let j = 0; j < item.searchTokens.length; j += 1) {
+      addSearchIndexBucket(nextState.tokenMap, item.searchTokens[j], item);
+    }
+
+    for (let j = 0; j < item.searchFragments.length; j += 1) {
+      addSearchIndexBucket(nextState.fragmentMap, item.searchFragments[j], item);
+    }
+  }
+
+  return nextState;
+}
+
+function addSearchCandidates(candidateSet, indexMap, key) {
+  const normalizedKey = String(key ?? "").trim();
+  if (!normalizedKey) {
+    return;
+  }
+
+  const matches = indexMap.get(normalizedKey);
+  if (!matches || matches.length === 0) {
+    return;
+  }
+
+  for (let i = 0; i < matches.length; i += 1) {
+    candidateSet.add(matches[i]);
+  }
+}
+
+function collectIndexedSearchCandidates(normalizedQuery, querySquashed, queryTokens) {
+  const candidates = new Set();
+
+  if (normalizedQuery.length >= SEARCH_INDEX_MIN_QUERY_LENGTH) {
+    addSearchCandidates(candidates, indexState.namePrefixMap, normalizedQuery);
+  }
+  if (querySquashed.length >= SEARCH_INDEX_MIN_QUERY_LENGTH) {
+    addSearchCandidates(candidates, indexState.nameSquashedPrefixMap, querySquashed);
+    addSearchCandidates(candidates, indexState.pinyinPrefixMap, querySquashed);
+  }
+
+  for (let i = 0; i < queryTokens.length; i += 1) {
+    const token = queryTokens[i];
+    if (!token) {
+      continue;
+    }
+    addSearchCandidates(candidates, indexState.tokenMap, token);
+    addSearchCandidates(candidates, indexState.namePrefixMap, token);
+    if (token.length >= SEARCH_FRAGMENT_LENGTH) {
+      addSearchCandidates(
+        candidates,
+        indexState.fragmentMap,
+        token.slice(0, SEARCH_FRAGMENT_LENGTH),
+      );
+    }
+  }
+
+  if (candidates.size === 0) {
+    return null;
+  }
+  return Array.from(candidates);
+}
+
+function shouldUseIndexedSearchPool(candidates, limit, normalizedQuery, queryTokens) {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return false;
+  }
+  if (normalizedQuery.length < SEARCH_INDEX_MIN_QUERY_LENGTH) {
+    return false;
+  }
+  if (candidates.length >= limit) {
+    return true;
+  }
+  return queryTokens.length > 0 && queryTokens.every((token) => token.length >= SEARCH_FRAGMENT_LENGTH);
 }
 
 function expandEnvironmentVariables(input) {
@@ -730,6 +941,11 @@ async function refreshSystemAppsIndex() {
   if (!isWindowsRuntime()) {
     indexState.items = [];
     indexState.byId = new Map();
+    indexState.namePrefixMap = new Map();
+    indexState.nameSquashedPrefixMap = new Map();
+    indexState.pinyinPrefixMap = new Map();
+    indexState.tokenMap = new Map();
+    indexState.fragmentMap = new Map();
     indexState.updatedAt = Date.now();
     return 0;
   }
@@ -746,9 +962,15 @@ async function refreshSystemAppsIndex() {
     const builtinApps = collectBuiltinApps();
 
     const mergedByLaunch = dedupeApps([...startMenuApps, ...uwpApps, ...builtinApps]);
-    const merged = dedupeByName(mergedByLaunch);
+    const merged = dedupeByName(mergedByLaunch).map((item) => buildIndexedSearchEntry(item));
+    const lookupState = buildSearchLookupState(merged);
     indexState.items = merged;
-    indexState.byId = new Map(merged.map((item) => [item.id, item]));
+    indexState.byId = lookupState.byId;
+    indexState.namePrefixMap = lookupState.namePrefixMap;
+    indexState.nameSquashedPrefixMap = lookupState.nameSquashedPrefixMap;
+    indexState.pinyinPrefixMap = lookupState.pinyinPrefixMap;
+    indexState.tokenMap = lookupState.tokenMap;
+    indexState.fragmentMap = lookupState.fragmentMap;
     indexState.updatedAt = Date.now();
     return merged.length;
   })()
@@ -760,22 +982,28 @@ async function refreshSystemAppsIndex() {
 }
 
 async function ensureIndexReady() {
-  const isStale = Date.now() - indexState.updatedAt > INDEX_TTL_MS;
-  if (indexState.items.length === 0 || isStale) {
+  if (indexState.items.length === 0) {
     await refreshSystemAppsIndex();
+    return;
+  }
+
+  const isStale = Date.now() - indexState.updatedAt > INDEX_TTL_MS;
+  if (isStale && !indexState.refreshPromise) {
+    void refreshSystemAppsIndex().catch(() => {
+      // Keep serving the current in-memory index when background refresh fails.
+    });
   }
 }
 
-function computeSearchScore(item, normalizedQuery, queryTokens) {
+function computeSearchScore(item, normalizedQuery, querySquashed, queryTokens) {
   if (!normalizedQuery || queryTokens.length === 0) {
     return -1;
   }
 
-  const name = normalizeText(item.name);
-  const text = item.searchText;
-  const nameSquashed = squashSpaces(item.name);
-  const textSquashed = text.replace(/\s+/g, "");
-  const querySquashed = normalizedQuery.replace(/\s+/g, "");
+  const name = item.normalizedName;
+  const text = item.normalizedSearchText;
+  const nameSquashed = item.nameSquashed;
+  const textSquashed = item.searchTextSquashed;
   const pinyinInitials = String(item.pinyinInitials || "");
   let score = item.matchBoost || 0;
 
@@ -806,7 +1034,7 @@ function computeSearchScore(item, normalizedQuery, queryTokens) {
   }
 
   for (const token of queryTokens) {
-    const tokenSquashed = token.replace(/\s+/g, "");
+    const tokenSquashed = token;
     if (name.startsWith(token)) {
       score += 180;
       continue;
@@ -866,6 +1094,32 @@ function normalizeLookupIds(input) {
     }
   }
   return output;
+}
+
+function isScoredEntryBetter(left, right) {
+  if (left.score !== right.score) {
+    return left.score > right.score;
+  }
+  return left.item.sortName.localeCompare(right.item.sortName) < 0;
+}
+
+function pushTopSearchEntry(topEntries, nextEntry, limit) {
+  if (topEntries.length >= limit && !isScoredEntryBetter(nextEntry, topEntries[topEntries.length - 1])) {
+    return;
+  }
+
+  let insertAt = topEntries.length;
+  for (let i = 0; i < topEntries.length; i += 1) {
+    if (isScoredEntryBetter(nextEntry, topEntries[i])) {
+      insertAt = i;
+      break;
+    }
+  }
+
+  topEntries.splice(insertAt, 0, nextEntry);
+  if (topEntries.length > limit) {
+    topEntries.length = limit;
+  }
 }
 
 function resolveIconCacheDirPath() {
@@ -1200,26 +1454,33 @@ async function searchSystemApps(queryInput, limitInput = SEARCH_LIMIT_DEFAULT) {
 
   const normalizedQuery = normalizeText(query);
   const queryTokens = tokenize(query);
+  const querySquashed = normalizedQuery.replace(/\s+/g, "");
   const limit = normalizeSearchLimit(limitInput);
+  const indexedCandidates = collectIndexedSearchCandidates(
+    normalizedQuery,
+    querySquashed,
+    queryTokens,
+  );
+  const searchPool = shouldUseIndexedSearchPool(
+    indexedCandidates,
+    limit,
+    normalizedQuery,
+    queryTokens,
+  )
+    ? indexedCandidates
+    : indexState.items;
 
-  const scored = [];
-  for (const item of indexState.items) {
-    const score = computeSearchScore(item, normalizedQuery, queryTokens);
+  const topEntries = [];
+  for (let i = 0; i < searchPool.length; i += 1) {
+    const item = searchPool[i];
+    const score = computeSearchScore(item, normalizedQuery, querySquashed, queryTokens);
     if (score < 0) {
       continue;
     }
-    scored.push({ score, item });
+    pushTopSearchEntry(topEntries, { score, item }, limit);
   }
 
-  scored.sort((a, b) => {
-    if (a.score !== b.score) {
-      return b.score - a.score;
-    }
-    return a.item.name.localeCompare(b.item.name);
-  });
-
-  const topEntries = scored.slice(0, limit).map(({ item }) => item);
-  return topEntries.map((entry) => toPublicEntryBase(entry));
+  return topEntries.map(({ item }) => toPublicEntryBase(item));
 }
 
 async function getSystemAppsByIds(appIdsInput) {
@@ -1241,6 +1502,39 @@ async function getSystemAppsByIds(appIdsInput) {
     return [];
   }
   return Promise.all(matched.map((entry) => toPublicEntry(entry)));
+}
+
+async function listSystemApps() {
+  if (!isWindowsRuntime()) {
+    return [];
+  }
+
+  await ensureIndexReady();
+  const allowedSystemAppIds = new Set([
+    "builtin:ai-chat",
+    "builtin:screen-recorder",
+  ]);
+  const builtinEntries = indexState.items.filter(
+    (entry) =>
+      entry &&
+      typeof entry === "object" &&
+      allowedSystemAppIds.has(String(entry.id ?? "").trim()),
+  );
+
+  if (builtinEntries.length === 0) {
+    return [];
+  }
+
+  builtinEntries.sort((a, b) => {
+    const categoryA = String(a.category ?? "").trim();
+    const categoryB = String(b.category ?? "").trim();
+    if (categoryA !== categoryB) {
+      return categoryA.localeCompare(categoryB);
+    }
+    return String(a.name ?? "").localeCompare(String(b.name ?? ""));
+  });
+
+  return Promise.all(builtinEntries.map((entry) => toPublicEntry(entry)));
 }
 
 function normalizeLaunchPayload(input) {
@@ -1351,6 +1645,7 @@ async function openSystemApp(appIdInput, launchPayloadInput) {
 
 module.exports = {
   getSystemAppsByIds,
+  listSystemApps,
   openSystemApp,
   refreshSystemAppsIndex,
   searchSystemApps,
