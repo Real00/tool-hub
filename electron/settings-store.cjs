@@ -4,14 +4,12 @@ const crypto = require("node:crypto");
 const { app } = require("electron");
 const { open } = require("sqlite");
 const sqlite3 = require("sqlite3");
+const {
+  DEFAULT_TABS,
+  applySettingsStoreMigrations,
+  seedDefaultSettingsTabs,
+} = require("./db/settings-store-schema.cjs");
 
-const DEFAULT_TABS = [
-  { id: "workspace", label: "工作区" },
-  { id: "projects", label: "项目" },
-  { id: "automation", label: "自动化" },
-  { id: "monitoring", label: "监控" },
-  { id: "security", label: "安全" },
-];
 const DEFAULT_VERIFY_COMMAND = "node --check src/index.js";
 const DEFAULT_QUICK_LAUNCHER_HOTKEY = "Alt+Space";
 const DEFAULT_AI_CHAT_TITLE = "New Chat";
@@ -43,62 +41,9 @@ async function initDb() {
     filename: dbPath,
     driver: sqlite3.Database,
   });
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS settings_tabs (
-      id TEXT PRIMARY KEY,
-      label TEXT NOT NULL,
-      sort_order INTEGER NOT NULL
-    );
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS app_generator_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS ai_chat_sessions (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS ai_chat_messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      attachments_json TEXT,
-      response_id TEXT,
-      status TEXT NOT NULL,
-      error_message TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY(session_id) REFERENCES ai_chat_sessions(id) ON DELETE CASCADE
-    );
-  `);
-
-  await db.exec(`
-    ALTER TABLE ai_chat_messages
-    ADD COLUMN response_id TEXT
-  `).catch(() => {});
-
-  await db.exec(`
-    ALTER TABLE ai_chat_messages
-    ADD COLUMN attachments_json TEXT
-  `).catch(() => {});
-
-  const row = await db.get("SELECT COUNT(1) AS count FROM settings_tabs");
-  if (!row || row.count === 0) {
-    await writeTabs(db, DEFAULT_TABS);
-  }
+  await db.exec("PRAGMA foreign_keys = ON");
+  await applySettingsStoreMigrations(db);
+  await seedDefaultSettingsTabs(db);
 
   return db;
 }

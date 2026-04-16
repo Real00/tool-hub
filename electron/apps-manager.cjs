@@ -5,6 +5,7 @@ const { pathToFileURL } = require("node:url");
 const { app, utilityProcess } = require("electron");
 const { open } = require("sqlite");
 const sqlite3 = require("sqlite3");
+const { applyAppsStoreMigrations } = require("./db/apps-store-schema.cjs");
 
 const TOOL_HUB_ROOT_DIR = ".tool-hub";
 const APPS_DIR_NAME = "apps";
@@ -67,60 +68,8 @@ async function initDb() {
     filename: resolveAppsDbPath(),
     driver: sqlite3.Database,
   });
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS apps (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      version TEXT NOT NULL,
-      tab_id TEXT NOT NULL DEFAULT 'workspace',
-      app_dir TEXT NOT NULL,
-      entry_rel TEXT NOT NULL,
-      ui_kind TEXT,
-      ui_value TEXT,
-      env_json TEXT NOT NULL,
-      capabilities_json TEXT NOT NULL DEFAULT '[]',
-      updated_at INTEGER NOT NULL
-    );
-  `);
-
-  const columns = await db.all("PRAGMA table_info(apps)");
-  const hasTabId = columns.some((col) => col.name === "tab_id");
-  if (!hasTabId) {
-    await db.exec("ALTER TABLE apps ADD COLUMN tab_id TEXT NOT NULL DEFAULT 'workspace';");
-  }
-  const hasCapabilitiesJson = columns.some((col) => col.name === "capabilities_json");
-  if (!hasCapabilitiesJson) {
-    await db.exec("ALTER TABLE apps ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]';");
-  }
-  const hasAutoStart = columns.some((col) => col.name === "auto_start");
-  if (!hasAutoStart) {
-    await db.exec("ALTER TABLE apps ADD COLUMN auto_start INTEGER NOT NULL DEFAULT 0;");
-  }
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS app_runs (
-      run_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      app_id TEXT NOT NULL,
-      pid INTEGER,
-      status TEXT NOT NULL,
-      started_at INTEGER NOT NULL,
-      ended_at INTEGER,
-      exit_code INTEGER,
-      FOREIGN KEY(app_id) REFERENCES apps(id)
-    );
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS app_kv (
-      app_id TEXT NOT NULL,
-      key TEXT NOT NULL,
-      value_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (app_id, key),
-      FOREIGN KEY(app_id) REFERENCES apps(id)
-    );
-  `);
+  await db.exec("PRAGMA foreign_keys = ON");
+  await applyAppsStoreMigrations(db);
 
   return db;
 }

@@ -31,6 +31,15 @@ const { createAppRuntimeWindowsController } = require("./main-process/app-runtim
 const { createContextDispatchController } = require("./main-process/context-dispatch.cjs");
 const { createConfigRestoreController } = require("./main-process/config-restore.cjs");
 const { createSystemRecorderManager } = require("./system-recorder-manager.cjs");
+const { registerCoreIpc } = require("./main-process/ipc/core-ipc.cjs");
+const { registerSettingsIpc } = require("./main-process/ipc/settings-ipc.cjs");
+const { registerGeneratorIpc } = require("./main-process/ipc/generator-ipc.cjs");
+const { registerAppsIpc } = require("./main-process/ipc/apps-ipc.cjs");
+const { registerSystemIpc } = require("./main-process/ipc/system-ipc.cjs");
+const { registerQuickLauncherIpc } = require("./main-process/ipc/quick-launcher-ipc.cjs");
+const { registerAiChatIpc } = require("./main-process/ipc/ai-chat-ipc.cjs");
+const { registerDeveloperToolsIpc } = require("./main-process/ipc/developer-tools-ipc.cjs");
+const { registerUpdateIpc } = require("./main-process/ipc/update-ipc.cjs");
 
 // Lazily loaded heavy modules; restore flow temporarily gates access.
 let appsManagerModule = null;
@@ -242,9 +251,6 @@ closeAllAppWindowsForRestore = () => {
 };
 getMainWindowForRestoreDialogs = () => windowManager.getMainWindow();
 
-const terminalSubscriptions = new Map();
-const appLogSubscriptions = new Map();
-
 function ensureWindowsContextMenuRegistered() {
   if (process.platform !== "win32" || isDev) {
     return;
@@ -344,633 +350,72 @@ async function loadQuickLauncherHotkeyFromSettings() {
   }
 }
 
-function makeTerminalSubscriptionKey(webContentsId, projectId) {
-  return `${webContentsId}:${projectId}`;
-}
-
-function removeTerminalSubscription(webContentsId, projectId) {
-  const key = makeTerminalSubscriptionKey(webContentsId, projectId);
-  const unsubscribe = terminalSubscriptions.get(key);
-  if (!unsubscribe) {
-    return;
-  }
-  terminalSubscriptions.delete(key);
-  try {
-    unsubscribe();
-  } catch {
-    // Ignore cleanup errors.
-  }
-}
-
-function removeAllTerminalSubscriptionsForWebContents(webContentsId) {
-  const prefix = `${webContentsId}:`;
-  Array.from(terminalSubscriptions.keys())
-    .filter((key) => key.startsWith(prefix))
-    .forEach((key) => {
-      const unsubscribe = terminalSubscriptions.get(key);
-      terminalSubscriptions.delete(key);
-      try {
-        unsubscribe?.();
-      } catch {
-        // Ignore cleanup errors.
-      }
-    });
-}
-
-function makeAppLogSubscriptionKey(webContentsId, appId) {
-  return `${webContentsId}:${appId}`;
-}
-
-function removeAppLogSubscription(webContentsId, appId) {
-  const key = makeAppLogSubscriptionKey(webContentsId, appId);
-  const unsubscribe = appLogSubscriptions.get(key);
-  if (!unsubscribe) {
-    return;
-  }
-  appLogSubscriptions.delete(key);
-  try {
-    unsubscribe();
-  } catch {
-    // Ignore cleanup errors.
-  }
-}
-
-function removeAllAppLogSubscriptionsForWebContents(webContentsId) {
-  const prefix = `${webContentsId}:`;
-  Array.from(appLogSubscriptions.keys())
-    .filter((key) => key.startsWith(prefix))
-    .forEach((key) => {
-      const unsubscribe = appLogSubscriptions.get(key);
-      appLogSubscriptions.delete(key);
-      try {
-        unsubscribe?.();
-      } catch {
-        // Ignore cleanup errors.
-      }
-    });
-}
-
-// Core IPC registrations.
-ipcMain.handle("context-dispatch:consume-pending", async () => {
-  return contextDispatchController.consumePending();
-});
-
-ipcMain.handle("tool-hub:ping", (_event, name) => {
-  const dbPath = getSettingsStore().resolveDatabasePath();
-  return `Electron backend is online: ${name} (sqlite: ${dbPath})`;
-});
-
-ipcMain.handle("settings:get-tabs", async () => {
-  return getSettingsStore().getSettingsTabs();
-});
-
-ipcMain.handle("settings:save-tabs", async (_event, tabs) => {
-  return getSettingsStore().saveSettingsTabs(tabs);
-});
-
-ipcMain.handle("settings:initialize-db", async () => {
-  return getSettingsStore().initializeSettingsStore();
-});
-
-ipcMain.handle("settings:backup-config", async () => {
-  return configRestoreController.backupConfigurationData();
-});
-
-ipcMain.handle("settings:restore-config", async () => {
-  return configRestoreController.restoreConfigurationFromArchive();
-});
-
-ipcMain.handle("generator:get-settings", async () => {
-  return getAppGenerator().getGeneratorSettings(getSettingsStore());
-});
-
-ipcMain.handle("generator:save-settings", async (_event, input) => {
-  return getAppGenerator().saveGeneratorSettings(getSettingsStore(), input);
-});
-
-ipcMain.handle("generator:detect-claude-cli", async () => {
-  return getAppGenerator().detectClaudeCli(getSettingsStore());
-});
-
-ipcMain.handle("generator:create-project", async (_event, projectName) => {
-  return getAppGenerator().createProject(projectName);
-});
-
-ipcMain.handle("generator:get-project", async (_event, projectId) => {
-  return getAppGenerator().getProject(projectId);
-});
-
-ipcMain.handle("generator:list-projects", async () => {
-  return getAppGenerator().listProjects();
-});
-
-ipcMain.handle(
-  "generator:read-project-file",
-  async (_event, projectId, filePath) => {
-    return getAppGenerator().readProjectFile(projectId, filePath);
-  },
-);
-
-ipcMain.handle("generator:update-project-agents", async (_event, projectId) => {
-  return getAppGenerator().updateProjectAgentsRules(projectId);
-});
-
-ipcMain.handle(
-  "generator:install-project",
-  async (_event, projectId, tabId, overwriteExisting, verifyCommandOverride) => {
-    return getAppGenerator().installProjectApp(
-      getAppsManager(),
-      getSettingsStore(),
-      projectId,
-      tabId,
-      overwriteExisting,
-      verifyCommandOverride,
-    );
-  },
-);
-
-ipcMain.handle("generator:validate-project", async (_event, projectId, tabId) => {
-  return getAppGenerator().validateProject(projectId, tabId);
-});
-
-ipcMain.handle("generator:run-verify", async (_event, projectId, commandOverride) => {
-  return getAppGenerator().runProjectVerify(
-    projectId,
-    getSettingsStore(),
-    commandOverride,
-  );
-});
-
-ipcMain.handle("generator:get-terminal", async (_event, projectId) => {
-  return getAppGenerator().getProjectTerminal(projectId);
-});
-
-ipcMain.handle("generator:start-terminal", async (_event, projectId) => {
-  return getAppGenerator().startProjectTerminal(projectId);
-});
-
-ipcMain.handle(
-  "generator:terminal-input",
-  async (_event, projectId, text, appendNewline) => {
-    return getAppGenerator().sendProjectTerminalInput(
-      projectId,
-      text,
-      appendNewline,
-    );
-  },
-);
-
-ipcMain.handle("generator:stop-terminal", async (_event, projectId) => {
-  return getAppGenerator().stopProjectTerminal(projectId);
-});
-
-ipcMain.handle(
-  "generator:resize-terminal",
-  async (_event, projectId, cols, rows) => {
-    return getAppGenerator().resizeProjectTerminal(projectId, cols, rows);
-  },
-);
-
-ipcMain.on("generator:terminal-subscribe", (event, projectId) => {
-  const webContents = event.sender;
-  const webContentsId = webContents.id;
-  const key = makeTerminalSubscriptionKey(webContentsId, projectId);
-  removeTerminalSubscription(webContentsId, projectId);
-
-  const unsubscribe = getAppGenerator().subscribeProjectTerminal(
-    projectId,
-    (payload) => {
-      if (webContents.isDestroyed()) {
-        removeTerminalSubscription(webContentsId, projectId);
-        return;
-      }
-      webContents.send("generator:terminal-output", payload);
-    },
-  );
-  terminalSubscriptions.set(key, unsubscribe);
-
-  webContents.once("destroyed", () => {
-    removeAllTerminalSubscriptionsForWebContents(webContentsId);
-  });
-});
-
-ipcMain.on("generator:terminal-unsubscribe", (event, projectId) => {
-  removeTerminalSubscription(event.sender.id, projectId);
-});
-
-ipcMain.handle("apps:get-root", () => {
-  const appsManager = getAppsManager();
-  return {
-    appsRoot: appsManager.resolveAppsRoot(),
-    dbPath: appsManager.resolveAppsDbPath(),
-  };
-});
-
-ipcMain.handle("apps:list", async () => {
-  return getAppsManager().listApps();
-});
-
-ipcMain.handle("apps:initialize-db", async () => {
-  return getAppsManager().initializeAppsDatabase();
-});
-
-ipcMain.handle(
-  "apps:install-from-directory",
-  async (_event, sourceDir, tabId, overwriteExisting) => {
-    return getAppsManager().installAppFromDirectory(
-      sourceDir,
-      tabId,
-      overwriteExisting,
-    );
-  },
-);
-
-ipcMain.handle("apps:start", async (_event, appId) => {
-  return getAppsManager().startApp(appId);
-});
-
-ipcMain.handle("apps:stop", async (_event, appId) => {
-  appRuntimeController.closeAppWindowById(appId);
-  return getAppsManager().stopApp(appId);
-});
-
-ipcMain.handle("apps:batch-stop", async (_event, appIds) => {
-  if (Array.isArray(appIds)) {
-    appIds.forEach((appId) => appRuntimeController.closeAppWindowById(appId));
-  }
-  return getAppsManager().stopApps(appIds);
-});
-
-ipcMain.handle("apps:get-logs", (_event, appId) => {
-  return getAppsManager().getAppLogs(appId);
-});
-
-ipcMain.handle("apps:get-runs", (_event, appId, limit) => {
-  return getAppsManager().getAppRuns(appId, limit);
-});
-
-ipcMain.handle("apps:update-tab", async (_event, appId, tabId) => {
-  return getAppsManager().updateAppTab(appId, tabId);
-});
-
-ipcMain.handle("apps:set-auto-start", async (_event, appId, enabled) => {
-  return getAppsManager().setAppAutoStart(appId, enabled);
-});
-
-ipcMain.handle("apps:kv-list", async (_event, appId) => {
-  return getAppsManager().listAppStorage(appId);
-});
-
-ipcMain.handle("apps:kv-delete", async (_event, appId, key) => {
-  return getAppsManager().deleteAppStorageKey(appId, key);
-});
-
-ipcMain.handle("apps:kv-clear", async (_event, appId) => {
-  return getAppsManager().clearAppStorage(appId);
-});
-
-ipcMain.handle("apps:remove", async (_event, appId, options) => {
-  appRuntimeController.closeAppWindowById(appId);
-  return getAppsManager().removeApp(appId, options);
-});
-
-ipcMain.handle("apps:batch-remove", async (_event, appIds, options) => {
-  if (Array.isArray(appIds)) {
-    appIds.forEach((appId) => appRuntimeController.closeAppWindowById(appId));
-  }
-  return getAppsManager().removeApps(appIds, options);
-});
-
-ipcMain.handle("apps:open-window", async (_event, appId, launchContext) => {
-  return appRuntimeController.openAppWindowById(appId, launchContext);
-});
-
-ipcMain.handle("apps:dispatch-capability", async (_event, payload) => {
-  try {
-    return await contextDispatchController.dispatchCapabilitySelection(payload);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    appRuntimeController.showSystemNotification(
-      APP_NAME,
-      `Capability dispatch failed: ${message}`,
-    );
-    throw error;
-  }
-});
-
-ipcMain.on("apps:logs-subscribe", (event, appId) => {
-  const webContents = event.sender;
-  const webContentsId = webContents.id;
-  const key = makeAppLogSubscriptionKey(webContentsId, appId);
-  removeAppLogSubscription(webContentsId, appId);
-
-  const unsubscribe = getAppsManager().subscribeAppLogs(appId, (payload) => {
-    if (webContents.isDestroyed()) {
-      removeAppLogSubscription(webContentsId, appId);
-      return;
-    }
-    webContents.send(APP_LOG_EVENT_CHANNEL, payload);
-  });
-  appLogSubscriptions.set(key, unsubscribe);
-
-  webContents.once("destroyed", () => {
-    removeAllAppLogSubscriptionsForWebContents(webContentsId);
-  });
-});
-
-ipcMain.on("apps:logs-unsubscribe", (event, appId) => {
-  removeAppLogSubscription(event.sender.id, appId);
-});
-
-ipcMain.handle("app-runtime:get-info", async (event) => {
-  return appRuntimeController.getRuntimeInfo(event);
-});
-
-ipcMain.handle("app-runtime:notify", async (event, titleInput, bodyInput, options) => {
-  return appRuntimeController.notify(event, titleInput, bodyInput, options);
-});
-
-ipcMain.handle("app-runtime:pick-directory", async (event, optionsInput) => {
-  return appRuntimeController.pickDirectoryForEvent(event, optionsInput);
-});
-
-ipcMain.handle("app-runtime:kv-get", async (event, key) => {
-  const appId = appRuntimeController.requireRuntimeAppId(event);
-  return getAppsManager().getAppStorageValue(appId, key);
-});
-
-ipcMain.handle("app-runtime:kv-set", async (event, key, value) => {
-  const appId = appRuntimeController.requireRuntimeAppId(event);
-  return getAppsManager().setAppStorageValue(appId, key, value);
-});
-
-ipcMain.handle("app-runtime:kv-delete", async (event, key) => {
-  const appId = appRuntimeController.requireRuntimeAppId(event);
-  return getAppsManager().deleteAppStorageKey(appId, key);
-});
-
-ipcMain.handle("app-runtime:kv-list", async (event, prefix) => {
-  const appId = appRuntimeController.requireRuntimeAppId(event);
-  return getAppsManager().listAppStorage(appId, prefix);
-});
-
-ipcMain.handle("app-runtime:kv-clear", async (event) => {
-  const appId = appRuntimeController.requireRuntimeAppId(event);
-  return getAppsManager().clearAppStorage(appId);
-});
-
-ipcMain.handle("app-runtime:file-read", async (event, filePath, options) => {
-  const appId = appRuntimeController.requireRuntimeAppId(event);
-  return getAppsManager().readAppFile(appId, filePath, options);
-});
-
-ipcMain.handle(
-  "app-runtime:file-write",
-  async (event, filePath, content, options) => {
-    const appId = appRuntimeController.requireRuntimeAppId(event);
-    return getAppsManager().writeAppFile(appId, filePath, content, options);
-  },
-);
-
-ipcMain.handle(
-  "app-runtime:system-file-read",
-  async (event, filePath, options) => {
-    const appId = appRuntimeController.requireRuntimeAppId(event);
-    return getAppsManager().readSystemFile(appId, filePath, options);
-  },
-);
-
-ipcMain.handle(
-  "app-runtime:system-file-write",
-  async (event, filePath, content, options) => {
-    const appId = appRuntimeController.requireRuntimeAppId(event);
-    return getAppsManager().writeSystemFile(appId, filePath, content, options);
-  },
-);
-
-ipcMain.handle("apps:pick-install-directory", async () => {
-  const result = await dialog.showOpenDialog(windowManager.getMainWindow() ?? undefined, {
-    title: "Select app source directory",
-    properties: ["openDirectory", "dontAddToRecent"],
-  });
-
-  if (result.canceled || result.filePaths.length === 0) {
-    return null;
-  }
-  return result.filePaths[0];
-});
-
-ipcMain.handle("system-apps:refresh", async () => {
-  return getSystemAppsManager().refreshSystemAppsIndex();
-});
-
-ipcMain.handle("system-apps:search", async (_event, query, limit) => {
-  return getSystemAppsManager().searchSystemApps(query, limit);
-});
-
-ipcMain.handle("system-apps:list", async () => {
-  return getSystemAppsManager().listSystemApps();
-});
-
-ipcMain.handle("system-apps:get-by-ids", async (_event, appIds) => {
-  return getSystemAppsManager().getSystemAppsByIds(appIds);
-});
-
-ipcMain.handle("system-apps:open", async (_event, appId, launchPayload) => {
-  if (systemRecorderManager.isRecorderSystemAppId(appId)) {
-    windowManager.showSystemRecorderWindow(appId);
-    return true;
-  }
-  if (appId === "builtin:developer-tools") {
-    windowManager.showDeveloperToolsWindow(
-      launchPayload,
-      launchPayload ? "quick-launcher" : "manual",
-    );
-    return true;
-  }
-  if (appId === "builtin:ai-chat") {
-    windowManager.showAiChatWindow(launchPayload, launchPayload ? "quick-launcher" : "manual");
-    return true;
-  }
-  return getSystemAppsManager().openSystemApp(appId, launchPayload);
-});
-
-ipcMain.handle("system-recorder:get-state", async () => {
-  return systemRecorderManager.getRecorderState();
-});
-
-ipcMain.handle("system-recorder:list-sources", async (_event, mode) => {
-  return systemRecorderManager.listRecorderSources(mode);
-});
-
-ipcMain.handle("system-recorder:prepare-preview", async (_event, input) => {
-  return systemRecorderManager.preparePreviewCapture(input);
-});
-
-ipcMain.handle("system-recorder:start", async (_event, input) => {
-  return systemRecorderManager.startRecorder(input);
-});
-
-ipcMain.handle("system-recorder:append-chunk", async (_event, sessionId, chunk) => {
-  return systemRecorderManager.appendRecordingChunk(sessionId, chunk);
-});
-
-ipcMain.handle("system-recorder:finish", async (_event, sessionId) => {
-  return systemRecorderManager.finishRecorder(sessionId);
-});
-
-ipcMain.handle("system-recorder:abort", async (_event, sessionId, errorMessage) => {
-  return systemRecorderManager.abortRecorder(sessionId, errorMessage);
-});
-
-ipcMain.handle("system-recorder:pick-ffmpeg-path", async () => {
-  return systemRecorderManager.pickAndSaveFfmpegPath();
-});
-
-ipcMain.handle("system-recorder:set-ffmpeg-path", async (_event, filePath) => {
-  return systemRecorderManager.setFfmpegPath(filePath);
-});
-
-ipcMain.handle("quick-launcher:close", async () => {
-  windowManager.closeQuickLauncherWindow();
-  return true;
-});
-
-ipcMain.handle("quick-launcher:get-hotkey-state", async () => {
-  return windowManager.getQuickLauncherHotkeyState();
-});
-
-ipcMain.handle("quick-launcher:save-hotkey", async (_event, accelerator) => {
-  const normalized = normalizeQuickLauncherHotkey(accelerator);
-  if (!normalized) {
-    throw new Error("Quick launcher hotkey cannot be empty.");
-  }
-  const saved = await getSettingsStore().saveQuickLauncherHotkey(normalized);
-  return windowManager.setQuickLauncherHotkey(saved);
-});
-
-ipcMain.handle("quick-launcher:apply-hotkey", async (_event, accelerator) => {
-  if (typeof accelerator === "string") {
-    const normalized = normalizeQuickLauncherHotkey(accelerator);
-    if (!normalized) {
-      throw new Error("Quick launcher hotkey cannot be empty.");
-    }
-    return windowManager.applyQuickLauncherHotkey(normalized);
-  }
-  return windowManager.applyQuickLauncherHotkey();
-});
-
-ipcMain.handle("quick-launcher:retry-hotkey", async () => {
-  return windowManager.retryQuickLauncherHotkey();
-});
-
-ipcMain.handle("quick-launcher:get-clipboard-path-context", async () => {
-  return getQuickLauncherClipboardPathContext();
-});
-
-ipcMain.handle("quick-launcher:get-clipboard-developer-tools-context", async () => {
-  return getQuickLauncherClipboardDeveloperToolsContext(clipboard.readText());
-});
-
-ipcMain.handle("quick-launcher:open-clipboard-path-file", async (_event, targetPath) => {
-  return openClipboardPathFile(targetPath);
-});
-
-ipcMain.handle("quick-launcher:open-clipboard-path-location", async (_event, targetPath) => {
-  return openClipboardPathLocation(targetPath);
-});
-
-ipcMain.handle("quick-launcher:set-size", async (_event, mode) => {
-  windowManager.setQuickLauncherWindowSize(mode);
-  return true;
-});
-
-ipcMain.handle("ai-chat:get-settings", async () => {
-  return getSettingsStore().getAiChatSettings();
-});
-
-ipcMain.handle("ai-chat:save-settings", async (_event, input) => {
-  return getSettingsStore().saveAiChatSettings(input);
-});
-
-ipcMain.handle("ai-chat:list-models", async (_event, input) => {
-  return aiChatManager.listModels(input);
-});
-
-ipcMain.handle("ai-chat:list-sessions", async () => {
-  return getSettingsStore().listAiChatSessions();
-});
-
-ipcMain.handle("ai-chat:create-session", async () => {
-  return getSettingsStore().createAiChatSession();
-});
-
-ipcMain.handle("ai-chat:delete-session", async (_event, sessionId) => {
-  return getSettingsStore().deleteAiChatSession(sessionId);
-});
-
-ipcMain.handle("ai-chat:get-session-messages", async (_event, sessionId) => {
-  return getSettingsStore().listAiChatSessionMessages(sessionId);
-});
-
-ipcMain.handle("ai-chat:send-message", async (_event, input) => {
-  return aiChatManager.sendMessage(input);
-});
-
-ipcMain.handle("ai-chat:begin-stream", async (_event, requestId) => {
-  return aiChatManager.beginStream(requestId);
-});
-
-ipcMain.handle("ai-chat:cancel-stream", async (_event, requestId) => {
-  return aiChatManager.cancelStream(requestId);
-});
-
-ipcMain.handle("ai-chat:get-launch-state", async () => {
-  return windowManager.getAiChatLaunchState();
-});
-
-ipcMain.handle("developer-tools:analyze-text", async (_event, text) => {
-  return analyzeDeveloperToolsText(text);
-});
-
-ipcMain.handle("developer-tools:run-transform", async (_event, text, transformId) => {
-  return runDeveloperToolsTransform(text, transformId);
-});
-
-ipcMain.handle("developer-tools:get-launch-state", async () => {
-  return windowManager.getDeveloperToolsLaunchState();
-});
-
-ipcMain.on("ai-chat:stream-subscribe", (event) => {
-  aiChatManager.subscribe(event.sender);
-});
-
-ipcMain.on("ai-chat:stream-unsubscribe", (event) => {
-  aiChatManager.unsubscribe(event.sender);
-});
-
-ipcMain.handle("update:get-state", async () => {
-  return autoUpdateController.getState();
-});
-
-ipcMain.handle("update:check", async () => {
-  return autoUpdateController.checkForUpdates("manual");
-});
-
-ipcMain.handle("update:download", async () => {
-  return autoUpdateController.downloadUpdate();
-});
-
-ipcMain.handle("update:install", async () => {
-  return autoUpdateController.installAndRestart();
-});
-
-ipcMain.on("update:subscribe", (event) => {
-  autoUpdateController.subscribe(event.sender);
-});
-
-ipcMain.on("update:unsubscribe", (event) => {
-  autoUpdateController.unsubscribe(event.sender);
+registerCoreIpc({
+  ipcMain,
+  contextDispatchController,
+  getSettingsStore,
+});
+
+registerSettingsIpc({
+  ipcMain,
+  getSettingsStore,
+  configRestoreController,
+});
+
+registerGeneratorIpc({
+  ipcMain,
+  getAppGenerator,
+  getAppsManager,
+  getSettingsStore,
+});
+
+registerAppsIpc({
+  ipcMain,
+  dialog,
+  getAppsManager,
+  appRuntimeController,
+  contextDispatchController,
+  appLogEventChannel: APP_LOG_EVENT_CHANNEL,
+  appName: APP_NAME,
+  getMainWindow: () => windowManager.getMainWindow(),
+});
+
+registerSystemIpc({
+  ipcMain,
+  getSystemAppsManager,
+  systemRecorderManager,
+  windowManager,
+});
+
+registerQuickLauncherIpc({
+  ipcMain,
+  clipboard,
+  windowManager,
+  getSettingsStore,
+  normalizeQuickLauncherHotkey,
+  getQuickLauncherClipboardPathContext,
+  getQuickLauncherClipboardDeveloperToolsContext,
+  openClipboardPathFile,
+  openClipboardPathLocation,
+});
+
+registerAiChatIpc({
+  ipcMain,
+  getSettingsStore,
+  aiChatManager,
+  windowManager,
+});
+
+registerDeveloperToolsIpc({
+  ipcMain,
+  analyzeDeveloperToolsText,
+  runDeveloperToolsTransform,
+  windowManager,
+});
+
+registerUpdateIpc({
+  ipcMain,
+  autoUpdateController,
 });
 
 // App lifecycle orchestration.

@@ -1,12 +1,4 @@
 import { createRouter, createWebHashHistory } from "vue-router";
-import GeneratorPage from "../pages/GeneratorPage.vue";
-import DeveloperToolsPage from "../pages/DeveloperToolsPage.vue";
-import QuickLauncherPage from "../pages/QuickLauncherPage.vue";
-import RuntimePage from "../pages/RuntimePage.vue";
-import SettingsPage from "../pages/SettingsPage.vue";
-import SystemAiPage from "../pages/SystemAiPage.vue";
-import SystemRecorderPage from "../pages/SystemRecorderPage.vue";
-import WorkspacePage from "../pages/WorkspacePage.vue";
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -18,42 +10,42 @@ const router = createRouter({
     {
       path: "/workspace",
       name: "workspace",
-      component: WorkspacePage,
+      component: () => import("../pages/WorkspacePage.vue"),
     },
     {
       path: "/settings",
       name: "settings",
-      component: SettingsPage,
+      component: () => import("../pages/SettingsPage.vue"),
     },
     {
       path: "/generator",
       name: "generator",
-      component: GeneratorPage,
+      component: () => import("../pages/GeneratorPage.vue"),
     },
     {
       path: "/runtime",
       name: "runtime",
-      component: RuntimePage,
+      component: () => import("../pages/RuntimePage.vue"),
     },
     {
       path: "/quick-launcher",
       name: "quick-launcher",
-      component: QuickLauncherPage,
+      component: () => import("../pages/QuickLauncherPage.vue"),
     },
     {
       path: "/developer-tools",
       name: "developer-tools",
-      component: DeveloperToolsPage,
+      component: () => import("../pages/DeveloperToolsPage.vue"),
     },
     {
       path: "/system-recorder",
       name: "system-recorder",
-      component: SystemRecorderPage,
+      component: () => import("../pages/SystemRecorderPage.vue"),
     },
     {
       path: "/system-ai",
       name: "system-ai",
-      component: SystemAiPage,
+      component: () => import("../pages/SystemAiPage.vue"),
     },
     {
       path: "/:pathMatch(.*)*",
