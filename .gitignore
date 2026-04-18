@@ -1,7 +1,11 @@
 node_modules/
 .pnpm-store/
 dist/
+build-electron/**
+!build-electron/
+!build-electron/package.json
 data/
 *.tsbuildinfo
 *.log
 release/
+.worktrees/

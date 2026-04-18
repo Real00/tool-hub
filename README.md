@@ -30,6 +30,8 @@ pnpm electron:dev
 pnpm build
 ```
 
+- `pnpm build`: runs renderer typecheck, Electron typecheck, Vite production build, and Electron runtime compilation into `build-electron/`.
+
 ## Windows packaging and release
 
 ```bash
@@ -179,13 +181,13 @@ src/
 
 - Vue components use `PascalCase.vue` (example: `AppTopMenu.vue`)
 - Non-component source files use `kebab-case` (example: `settings.ts`)
-- Process files use explicit role naming (`main-process.cjs`, `preload-bridge.cjs`).
+- Process files use explicit role naming (`main-process.ts`, `preload-bridge.ts`).
 
 ## Technical Architecture
 
 - Frontend bridge: `src/platform/electron-bridge.ts`
-- SQLite storage: `electron/settings-store.cjs`, `electron/apps-manager.cjs`
-- IPC handlers: `electron/main-process.cjs`, `electron/preload-bridge.cjs`
+- SQLite storage: `electron/settings-store.ts`, `electron/apps-manager.ts`
+- IPC handlers: `electron/main-process.ts`, `electron/preload-bridge.ts`
 - API methods (renderer -> preload):
   - `ping`
   - settings: `getSettingsTabs` `saveSettingsTabs` `initializeSettingsDatabase` `backupConfiguration` `restoreConfigurationFromArchive`

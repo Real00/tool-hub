@@ -9,7 +9,8 @@ This project is a desktop application built with Vue 3.
 - `src/platform/`: runtime bridge/adapters (for example `electron-bridge.ts`).
 - `src/styles/`: global styles.
 - `src/types/`: shared TypeScript types.
-- `electron/`: main/preload/runtime modules (`main-process.cjs`, `preload-bridge.cjs`, `apps-manager.cjs`, `settings-store.cjs`).
+- `electron/`: Electron source modules (`main-process.ts`, `preload-bridge.ts`, `apps-manager.ts`, `settings-store.ts`).
+- `build-electron/`: compiled Electron runtime output (generated; do not edit manually).
 - `templates/node-hello-app/`: installable Node app template and developer guide.
 - `dist/`: build output (generated; do not edit manually).
 
@@ -20,6 +21,8 @@ Use `pnpm` for all workflows.
 - `pnpm dev`: run Vite web dev server only.
 - `pnpm electron:dev`: run Vite + desktop runtime together for development.
 - `pnpm typecheck`: run TypeScript checks (`vue-tsc`).
+- `pnpm electron:typecheck`: run Electron TypeScript checks (`tsc -p tsconfig.electron.json --noEmit`).
+- `pnpm electron:build`: compile Electron TypeScript sources to `build-electron/`.
 - `pnpm build`: run type-check and production build.
 - `pnpm preview`: preview built web assets.
 - `pnpm electron:start`: launch application directly (fast start, no forced build).
@@ -39,20 +42,20 @@ Use `pnpm` for all workflows.
 - App category mapping is DB-driven (`apps.tab_id` in SQLite), not `app.json`.
 
 ## System App Development Requirements
-- System apps are built-in host capabilities, not user-installed apps. Do not put them into the install/start/stop/remove flow used by `apps-manager.cjs`, and do not model them as entries from `app.json`.
-- Built-in system app metadata is registered in `electron/system-tools-registry.cjs`. Use stable ids with the `builtin:` prefix, and fill in `name`, `description`, `category`, icon, keywords, and `matchBoost`.
-- If a system app uses `launchType: "internal"`, the main process must handle it explicitly in `ipcMain.handle("system-apps:open")`. `electron/system-apps-manager.cjs` intentionally throws for internal apps that are not host-handled.
-- Renderer code must access system app capabilities only through `electron/preload-bridge.cjs` and `src/platform/electron-bridge.ts`. Do not introduce direct renderer-side Node access.
-- If a system app needs its own window, add a dedicated route in `src/router/index.ts`, keep the isolated shell handling in `src/app/App.vue`, and create/show the window in `electron/main-process/window-manager.cjs`.
+- System apps are built-in host capabilities, not user-installed apps. Do not put them into the install/start/stop/remove flow used by `apps-manager.ts`, and do not model them as entries from `app.json`.
+- Built-in system app metadata is registered in `electron/system-tools-registry.ts`. Use stable ids with the `builtin:` prefix, and fill in `name`, `description`, `category`, icon, keywords, and `matchBoost`.
+- If a system app uses `launchType: "internal"`, the main process must handle it explicitly in `ipcMain.handle("system-apps:open")`. `electron/system-apps-manager.ts` intentionally throws for internal apps that are not host-handled.
+- Renderer code must access system app capabilities only through `electron/preload-bridge.ts` and `src/platform/electron-bridge.ts`. Do not introduce direct renderer-side Node access.
+- If a system app needs its own window, add a dedicated route in `src/router/index.ts`, keep the isolated shell handling in `src/app/App.vue`, and create/show the window in `electron/main-process/window-manager.ts`.
 - Preserve Electron security defaults for every system app window: `contextIsolation: true`, `nodeIntegration: false`. Any native integration should stay in main/preload, not inside Vue pages.
-- If a system app should appear in the Settings "System Apps" panel, also update the allowlist in `electron/system-apps-manager.cjs:listSystemApps()`. Registering an app in the system tools registry alone is not enough.
+- If a system app should appear in the Settings "System Apps" panel, also update the allowlist in `electron/system-apps-manager.ts:listSystemApps()`. Registering an app in the system tools registry alone is not enough.
 - If a system app needs launch payload support from quick launcher or other entry points, declare `acceptsLaunchPayload` in the registry and add the corresponding host-side state handoff logic.
 - System apps must degrade clearly outside supported runtime. Current implementation expects Electron runtime, and recorder flows additionally require Windows support.
 - Changes to system apps should be smoke-tested in `pnpm electron:dev`, including window open flow, renderer/main IPC, and failure states when runtime requirements are missing.
 
 ### Current System Apps
-- `builtin:ai-chat`: independent AI window at `/system-ai`, opened by the host window manager instead of the generic app runtime. It supports launch payloads from quick launcher, and its settings/session/message persistence lives in `settings-store.cjs`.
-- `builtin:screen-recorder`: independent recorder window at `/system-recorder`, backed by `electron/system-recorder-manager.cjs` plus the renderer `SystemRecorderPanel.vue`. It uses Electron `desktopCapturer` and browser `MediaRecorder`, with optional MP4 transcoding via configured `ffmpeg`.
+- `builtin:ai-chat`: independent AI window at `/system-ai`, opened by the host window manager instead of the generic app runtime. It supports launch payloads from quick launcher, and its settings/session/message persistence lives in `settings-store.ts`.
+- `builtin:screen-recorder`: independent recorder window at `/system-recorder`, backed by `electron/system-recorder-manager.ts` plus the renderer `SystemRecorderPanel.vue`. It uses Electron `desktopCapturer` and browser `MediaRecorder`, with optional MP4 transcoding via configured `ffmpeg`.
 - `builtin:window-recorder`: this is an internal recorder mode sharing the same recorder page/manager as screen recording. It is fetched by id inside the recorder UI, but it is not currently exposed as a separate entry in the Settings "System Apps" list.
 
 ## Testing Guidelines
